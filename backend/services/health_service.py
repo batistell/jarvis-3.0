@@ -9,6 +9,21 @@ class GPUHealthService:
     Serviço de Monitoramento de Saúde da GPU e dos Modelos de IA (STT, LLM, TTS).
     Mede uso de VRAM, temperatura da GPU, latência de inferência e detecta degradação de performance.
     """
+    last_stt_latency_ms: float = 0.0
+    last_llm_latency_ms: float = 0.0
+    last_tts_latency_ms: float = 0.0
+
+    @classmethod
+    def record_stt_latency(cls, ms: float):
+        cls.last_stt_latency_ms = round(ms, 1)
+
+    @classmethod
+    def record_llm_latency(cls, ms: float):
+        cls.last_llm_latency_ms = round(ms, 1)
+
+    @classmethod
+    def record_tts_latency(cls, ms: float):
+        cls.last_tts_latency_ms = round(ms, 1)
 
     @classmethod
     def get_gpu_metrics(cls) -> dict:
@@ -38,10 +53,10 @@ class GPUHealthService:
                     warning = None
                     if vram_percent >= 90.0:
                         status = "CRITICAL_VRAM_FULL"
-                        warning = "VRAM da GPU quase 100% cheia. Pode ocorrer paginação em RAM do sistema e lentidão."
+                        warning = "⚠️ VRAM da GPU 90%+ cheia! Risco de paginação em RAM e extrema lentidão."
                     elif temp_c >= 82.0:
                         status = "HIGH_TEMPERATURE"
-                        warning = "Temperatura elevada na GPU. Risco de throttling térmico."
+                        warning = "⚠️ Temperatura elevada na GPU (Throttling térmico)."
 
                     return {
                         "gpu_name": parts[0],
@@ -98,16 +113,19 @@ class GPUHealthService:
                     "model_name": settings.WHISPER_MODEL,
                     "device": settings.WHISPER_DEVICE,
                     "compute_type": settings.WHISPER_COMPUTE_TYPE,
-                    "is_loaded": stt_loaded
+                    "is_loaded": stt_loaded,
+                    "latency_ms": cls.last_stt_latency_ms
                 },
                 "llm": {
                     "engine": settings.LLM_ENGINE,
                     "model_name": settings.NATIVE_LLM_MODEL,
-                    "is_loaded": llm_loaded
+                    "is_loaded": llm_loaded,
+                    "latency_ms": cls.last_llm_latency_ms
                 },
                 "tts": {
                     "engine": settings.TTS_ENGINE,
-                    "voice": settings.TTS_VOICE
+                    "voice": settings.TTS_VOICE,
+                    "latency_ms": cls.last_tts_latency_ms
                 }
             }
         }

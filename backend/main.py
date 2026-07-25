@@ -161,6 +161,7 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                         print(f"🧠 [LLM GENERATING] Processando no Qwen 2.5 (Idioma detectado pelo Whisper: {detected_lang.upper()})...", flush=True)
                         await websocket.send_json({"type": "llm_status", "status": "generating"})
                         
+                        llm_start_t = time.time()
                         full_llm_response = ""
                         async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
                             full_llm_response += chunk
@@ -168,6 +169,8 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                                 "type": "llm_chunk",
                                 "text": chunk
                             })
+                        llm_elapsed = (time.time() - llm_start_t) * 1000.0
+                        health_service.record_llm_latency(llm_elapsed)
                         
                         print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
                         

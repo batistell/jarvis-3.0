@@ -109,6 +109,9 @@ class FasterWhisperEngine(BaseSTTEngine):
             full_text = hallucination_filter.clean_text(raw_text)
             
             elapsed_ms = (time.time() - start_time) * 1000.0
+            from backend.services.health_service import health_service
+            health_service.record_stt_latency(elapsed_ms)
+            
             detected_lang = getattr(info, "language", "pt")
             prob = getattr(info, "language_probability", 1.0)
 
