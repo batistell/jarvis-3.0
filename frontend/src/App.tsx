@@ -57,6 +57,20 @@ export const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
+  // Sincroniza VoiceState com o estado real de reprodução de áudio do TTS
+  useEffect(() => {
+    const unsub = audioQueuePlayer.onPlayingChange((playing) => {
+      setVoiceState((prev) => {
+        // Só altera para 'speaking' ou 'idle' quando o áudio muda de estado
+        // Não sobrescreve 'listening', 'transcribing' ou 'thinking'
+        if (playing) return 'speaking';
+        if (prev === 'speaking') return 'idle';
+        return prev;
+      });
+    });
+    return unsub;
+  }, []);
+
   // Inicializa o WebSocket
   useEffect(() => {
     const unsubState = jarvisSocket.onStateChange((status) => {
@@ -67,6 +81,10 @@ export const App: React.FC = () => {
       if (data.type === 'stt_partial') {
         setPartialTranscript(data.text);
         setVoiceState('listening');
+        // Interrompe o áudio TTS se o usuário começou a falar enquanto o Jarvis falava
+        if (audioQueuePlayer.isPlaying) {
+          audioQueuePlayer.interrupt();
+        }
       } else if (data.type === 'stt_status') {
         if (data.status === 'transcribing') {
           setVoiceState('transcribing');
@@ -115,8 +133,11 @@ export const App: React.FC = () => {
           }
         });
       } else if (data.type === 'llm_result') {
-        setVoiceState('idle');
+        // Só vai para idle se não houver áudio ainda tocando
         setIsGenerating(false);
+        if (!audioQueuePlayer.isPlaying) {
+          setVoiceState('idle');
+        }
       } else if (data.type === 'tts_audio' && data.audio) {
         try {
           const binaryString = window.atob(data.audio);
@@ -147,6 +168,10 @@ export const App: React.FC = () => {
       setVoiceState('idle');
       setPartialTranscript('');
     } else {
+      // Interrompe o TTS antes de começar a gravar
+      if (audioQueuePlayer.isPlaying) {
+        audioQueuePlayer.interrupt();
+      }
       startRecording();
       setVoiceState('listening');
     }
