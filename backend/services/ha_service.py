@@ -298,7 +298,31 @@ class HAService:
 
         print(f"🔍 [HA FEEDBACK] Estado inicial de '{friendly_name}' ({entity_id}): '{initial_state}'", flush=True)
 
+        # 1.1 Checa se o dispositivo JÁ está no estado solicitado antes de enviar qualquer chamada de serviço
+        if initial_state == target_expected_state:
+            conversation_service.set_last_device(
+                session_id=session_id,
+                entity_id=entity_id,
+                friendly_name=friendly_name,
+                target_name=friendly_name,
+                domain=domain
+            )
+            estado_pt = "ligado(a)" if target_expected_state == "on" else "desligado(a)"
+            msg = f"O dispositivo '{friendly_name}' já está {estado_pt}."
+            print(f"ℹ️ [HA ALREADY IN STATE] '{friendly_name}' ({entity_id}) já se encontra em '{initial_state}'. Chamada de serviço ignorada.", flush=True)
+            return {
+                "success": True,
+                "verified": True,
+                "already_in_state": True,
+                "entity_id": entity_id,
+                "action": service,
+                "expected_state": target_expected_state,
+                "actual_state": initial_state,
+                "message": msg
+            }
+
         # 2. Dispara o serviço no Home Assistant
+
         service_sent = await self.call_service(domain, service, entity_id)
         if not service_sent:
             msg = f"Falha ao enviar comando de {action_desc} para '{friendly_name}'."
