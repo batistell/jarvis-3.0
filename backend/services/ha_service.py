@@ -5,6 +5,7 @@ import unicodedata
 import re
 from typing import Any
 from backend.config import settings
+from backend.services.conversation_service import conversation_service
 
 def _normalize_text(text: str) -> str:
     """Remove acentos, converte para minúsculas e remove caracteres especiais."""
@@ -37,11 +38,18 @@ TRANSLATION_MAP: dict[str, list[str]] = {
 # Domínios válidos para controle de iluminação/dispositivos (exclui estritamente button, sensor, automation, etc.)
 ALLOWED_DEVICE_DOMAINS = {"light", "switch", "group", "fan", "climate"}
 
+# Pronomes e termos anafóricos que referenciam o último dispositivo do contexto
+ANAPHORA_PRONOUNS = {
+    "", "ela", "ele", "elas", "eles", "isso", "essa", "este", "esta", "a luz", "o dispositivo",
+    "a lampada", "lampada", "luz", "novo", "de novo", "mesmo", "mesma"
+}
+
 class HAService:
     """
     Serviço de integração assíncrono com a API REST do Home Assistant.
     Fornece pré-carregamento de entidades na inicialização, resolução inteligente por nome
-    (com tradução PT-BR <-> EN), filtro estrito de domínios e validação de feedback de sensores/estados.
+    (com tradução PT-BR <-> EN), resolução de anáforas (memória de contexto de conversa)
+    e controle de dispositivos com validação de feedback de sensores/estados.
     """
 
     def __init__(self, ha_url: str | None = None, ha_token: str | None = None):
@@ -150,18 +158,15 @@ class HAService:
         if not q_norm:
             return None
 
-        # Stopwords comuns a ignorar na análise de cômodos
         stopwords = {"luz", "lampada", "tomada", "interruptor", "dispositivo", "de", "da", "do", "das", "dos", "a", "o"}
         q_clean_words = [w for w in q_norm.split() if w not in stopwords]
         base_term = " ".join(q_clean_words) if q_clean_words else q_norm
 
-        # Expansão de sinônimos/traduções (ex: "escritorio" -> ["escritorio", "office", "desk", "study"])
         search_terms = [q_norm, base_term]
         for word in q_clean_words + [q_norm, base_term]:
             if word in TRANSLATION_MAP:
                 search_terms.extend(TRANSLATION_MAP[word])
 
-        # Remove duplicadas mantendo ordem
         search_terms = list(dict.fromkeys([t for t in search_terms if t]))
 
         best_entity_id = None
@@ -171,7 +176,6 @@ class HAService:
             e_id = e.get("entity_id", "")
             e_domain = e_id.split(".")[0] if "." in e_id else ""
 
-            # FILTRO ESTRITO: Apenas domínios válidos de atuação física (ignora button, sensor, automation, etc.)
             if e_domain not in ALLOWED_DEVICE_DOMAINS:
                 continue
 
@@ -179,18 +183,14 @@ class HAService:
             e_id_norm = _normalize_text(e_id)
             friendly_norm = _normalize_text(friendly_name)
 
-            # Prioriza domínio principal 'light' se solicitado
             domain_bonus = 10 if e_domain == "light" else (5 if e_domain == "switch" else 0)
 
             for term in search_terms:
                 score = 0
-                # 1. Correspondência exata
                 if term == friendly_norm or term == e_id_norm or f"{domain}.{term}" == e_id_norm:
                     score = 100 + domain_bonus
-                # 2. Termo como substring exata no nome amigável ou ID (ex: "office" em "office light")
                 elif term in friendly_norm or term in e_id_norm:
                     score = 85 + domain_bonus
-                # 3. Sobreposição de tokens
                 else:
                     term_tokens = set(term.split())
                     fname_tokens = set(friendly_norm.split())
@@ -246,11 +246,12 @@ class HAService:
         entity_id: str,
         expected_state: str | None = None,
         wait_timeout: float = 3.0,
-        poll_interval: float = 0.5
+        poll_interval: float = 0.5,
+        session_id: str = "default"
     ) -> dict[str, Any]:
         """
         Executa um comando no Home Assistant e VALIDA O ESTADO VIA FEEDBACK DE SENSOR.
-        Só confirma sucesso se o estado verificado no HA bater com o esperado após a execução.
+        Se bem-sucedido, armazena o dispositivo no contexto da sessão para conversas futuras.
         """
         if "." not in entity_id:
             entity_id = f"{domain}.{entity_id}"
@@ -329,6 +330,14 @@ class HAService:
 
         # 4. Avaliação estrita do resultado
         if verified:
+            # Salva o dispositivo no contexto da conversa para referências futuras
+            conversation_service.set_last_device(
+                session_id=session_id,
+                entity_id=entity_id,
+                friendly_name=friendly_name,
+                target_name=friendly_name,
+                domain=domain
+            )
             estado_pt = "ligado(a)" if target_expected_state == "on" else "desligado(a)"
             msg = f"Confirmado pelo sensor: O dispositivo '{friendly_name}' foi {estado_pt} com sucesso."
             print(f"✅ [HA FEEDBACK VERIFIED] {msg}", flush=True)
@@ -358,57 +367,103 @@ class HAService:
                 "message": msg
             }
 
-    async def parse_and_execute_ha_command(self, user_text: str) -> dict[str, Any] | None:
+    async def parse_and_execute_ha_command(self, user_text: str, session_id: str = "default") -> dict[str, Any] | None:
         """
         Analisa o texto do usuário para detectar comandos de controle de luzes/dispositivos
         e executa a validação estrita com feedback de sensor do Home Assistant.
+        Suporta anáforas e referências a conversas anteriores (ex: "agora desligue", "desliga ela").
         """
         text_clean = user_text.strip().lower()
         text_clean = re.sub(r'^(pode|poderia|por\s+favor|jarvis|por\s+gentileza|você\s+pode|faça\s+o\s+favor\s+de)\s+', '', text_clean).strip()
 
         # Padrões de ativação (ON)
         on_match = re.search(
-            r'\b(liga|ligar|ligue|acende|acender|acenda|ativa|ativar|ative|turn\s*on)\b\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.+)',
+            r'\b(liga|ligar|ligue|acende|acender|acenda|ativa|ativar|ative|turn\s*on)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
             text_clean
         )
         # Padrões de desativação (OFF)
         off_match = re.search(
-            r'\b(desliga|desligar|desligue|apaga|apagar|apague|desativa|desativar|desative|turn\s*off)\b\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.+)',
+            r'\b(desliga|desligar|desligue|apaga|apagar|apague|desativa|desativar|desative|turn\s*off)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
+            text_clean
+        )
+        # Padrões de afirmação no passado (ex: "agora desliguei", "já desliguei", "eu desliguei")
+        past_match = re.search(
+            r'\b(desliguei|apaguei|desativei|liguei|acendi|ativei)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo)?\s*(?:de|da|do)?\s*(.*))?',
             text_clean
         )
 
+        if past_match:
+            verb = past_match.group(1).lower()
+            last_dev = conversation_service.get_last_device(session_id)
+            dev_name = last_dev["friendly_name"] if last_dev else "dispositivo"
+            target_entity = last_dev["entity_id"] if last_dev else None
+            
+            actual_st = "desconhecido"
+            if target_entity:
+                st_data = await self.get_entity_state(target_entity)
+                if st_data:
+                    actual_st = st_data.get("state", "desconhecido")
+
+            state_pt = "desligado(a)" if actual_st == "off" else ("ligado(a)" if actual_st == "on" else actual_st)
+            msg = f"Entendido! O sensor do Home Assistant confirma que '{dev_name}' está em '{state_pt}'."
+            print(f"ℹ️ [HA PAST INTENT] Afirmação no passado detectada ('{verb}'). Confirmação de sensor: \"{msg}\"", flush=True)
+            return {
+                "success": True,
+                "verified": True,
+                "message": msg
+            }
+
         action = None
-        target_name = None
+        raw_target = None
 
         if off_match:
             action = "turn_off"
-            target_name = off_match.group(2).strip()
+            raw_target = (off_match.group(2) or "").strip()
         elif on_match:
             action = "turn_on"
-            target_name = on_match.group(2).strip()
+            raw_target = (on_match.group(2) or "").strip()
 
-        if not action or not target_name:
+
+        if not action:
             return None
 
-        target_name = re.sub(r'[\?\.\!\,]', '', target_name)
-        target_name = re.sub(r'\b(por\s+favor|agora|jarvis|gentileza)\b', '', target_name).strip()
+        # Limpeza do termo alvo e advérbios de repetição/cortesia
+        target_clean = re.sub(r'[\?\.\!\,]', '', raw_target)
+        target_clean = re.sub(r'\b(por\s+favor|agora|jarvis|gentileza|de\s+novo|denovo|novamente)\b', '', target_clean).strip()
 
-        if not target_name:
-            return None
 
-        # Tenta resolver a entidade no HA com tradução PT-BR <-> EN e filtro estrito de domínios
-        entity_id = await self.find_entity_by_name(target_name, domain="light")
+        target_norm = _normalize_text(target_clean)
+
+        entity_id = None
+
+        # RESOLUÇÃO DE ANÁFORAS / PRONOMES / CÔMODO OMITIDO
+        if not target_norm or target_norm in ANAPHORA_PRONOUNS:
+            last_dev = conversation_service.get_last_device(session_id)
+            if last_dev:
+                entity_id = last_dev["entity_id"]
+                friendly = last_dev["friendly_name"]
+                print(f"🧠 [ANAPHORA RESOLUTION] Mapeado termo pronominal '{target_clean or 'omitido'}' para o último dispositivo do contexto: '{friendly}' ({entity_id})", flush=True)
+            else:
+                msg = "Não sei a qual luz ou dispositivo você está se referindo. Por favor especifique o cômodo (ex: 'escritório', 'sala')."
+                print(f"⚠️ [ANAPHORA RESOLUTION] {msg}", flush=True)
+                return {
+                    "success": False,
+                    "verified": False,
+                    "message": msg
+                }
+        else:
+            # Tenta resolver a entidade no HA com tradução PT-BR <-> EN e filtro de domínios
+            entity_id = await self.find_entity_by_name(target_clean, domain="light")
 
         if not entity_id:
-            # Lista luzes e interruptores reais disponíveis no HA do usuário para dar feedback informativo
             available = await self.list_entities()
             avail_lights = [
                 e.get("attributes", {}).get("friendly_name") or e.get("entity_id")
                 for e in available
                 if e.get("entity_id", "").startswith(("light.", "switch."))
             ]
-            list_str = f" Luzes/Dispositivos encontrados: {', '.join(avail_lights[:5])}." if avail_lights else ""
-            msg = f"Cômodo ou dispositivo '{target_name}' não foi encontrado no seu Home Assistant.{list_str}"
+            list_str = f" Dispositivos encontrados: {', '.join(avail_lights[:5])}." if avail_lights else ""
+            msg = f"Cômodo ou dispositivo '{target_clean}' não foi encontrado no seu Home Assistant.{list_str}"
             print(f"⚠️ [HA INTENT PARSER] {msg}", flush=True)
             return {
                 "success": False,
@@ -417,12 +472,13 @@ class HAService:
             }
 
         domain = entity_id.split(".")[0]
-        print(f"🎯 [HA INTENT PARSER] Comando detectado: action='{action}', target='{target_name}' -> entity_id='{entity_id}'", flush=True)
+        print(f"🎯 [HA INTENT PARSER] Comando detectado: action='{action}', target='{target_clean or 'contexto'}' -> entity_id='{entity_id}'", flush=True)
 
         return await self.control_device_with_feedback(
             domain=domain,
             action=action,
-            entity_id=entity_id
+            entity_id=entity_id,
+            session_id=session_id
         )
 
 ha_service = HAService()

@@ -17,8 +17,10 @@ from backend.services.llm_service import llm_service
 from backend.services.tts_service import tts_service
 from backend.services.health_service import health_service
 from backend.services.ha_service import ha_service
+from backend.services.conversation_service import conversation_service
 
 # Regex para extrair sentenças completas do stream de tokens do LLM
+
 
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?;:\n])\s+')
 
@@ -199,16 +201,22 @@ async def ha_chat_endpoint(req: HAChatRequest):
 
     print(f"🤖 [HA ASSIST CHAT] Mensagem recebida: \"{prompt}\" (conversation_id: {conversation_id})", flush=True)
     try:
-        # 1. Tenta interpretar como comando de automação com feedback de sensor do HA
-        ha_res = await ha_service.parse_and_execute_ha_command(prompt)
+        conversation_service.add_user_message(conversation_id, prompt)
+
+        # 1. Tenta interpretar como comando de automação com feedback de sensor do HA e suporte a contexto
+        ha_res = await ha_service.parse_and_execute_ha_command(prompt, session_id=conversation_id)
         if ha_res:
             reply_clean = ha_res["message"]
         else:
-            reply_text = await llm_service.generate(prompt)
+            history = conversation_service.get_history(conversation_id)
+            reply_text = await llm_service.generate(prompt, history=history)
             reply_clean = reply_text.strip()
+
+        conversation_service.add_assistant_message(conversation_id, reply_clean)
     except Exception as e:
         print(f"❌ [HA ASSIST CHAT ERROR] Erro no processamento: {e}", flush=True)
         reply_clean = "Desculpe, ocorreu um erro ao processar a resposta no Jarvis."
+
 
     print(f"💬 [HA ASSIST CHAT RESPONSE]: \"{reply_clean}\"", flush=True)
     return {
@@ -349,11 +357,14 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             f"Você DEVE responder obrigatoriamente no idioma '{detected_lang.upper()}'."
                         )
 
+                        session_id = user_email or "default"
+                        conversation_service.add_user_message(session_id, transcribed_text)
+
                         print(f"🧠 [PROCESSING RESPONSE] Analisando comando e gerando resposta (Idioma: {detected_lang.upper()})...", flush=True)
                         await websocket.send_json({"type": "llm_status", "status": "generating"})
 
-                        # Verifica se é um comando de automação residencial com validação de sensor do HA
-                        ha_res = await ha_service.parse_and_execute_ha_command(transcribed_text)
+                        # Verifica se é um comando de automação residencial com validação de sensor do HA e suporte a contexto
+                        ha_res = await ha_service.parse_and_execute_ha_command(transcribed_text, session_id=session_id)
                         
                         if ha_res:
                             full_llm_response = ha_res["message"]
@@ -392,7 +403,8 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                                 except Exception as tts_err:
                                     print(f"⚠️ [TTS ERROR] {tts_err}", flush=True)
 
-                            async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
+                            history = conversation_service.get_history(session_id)
+                            async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt, history=history):
                                 full_llm_response += chunk
                                 tts_buffer += chunk
                                 await websocket.send_json({"type": "llm_chunk", "text": chunk})
@@ -412,6 +424,7 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             llm_elapsed = (time.time() - llm_start_t) * 1000.0
                             health_service.record_llm_latency(llm_elapsed)
 
+                        conversation_service.add_assistant_message(session_id, full_llm_response.strip())
                         print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
 
                         await websocket.send_json({
@@ -425,24 +438,30 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
             # 2. Comandos de texto manuais do chat
             elif "text" in message and message["text"]:
                 text_cmd = message["text"]
+                session_id = user_email or "default"
+                conversation_service.add_user_message(session_id, text_cmd)
+
                 print(f"\n💬 [TEXT COMMAND] Mensagem de texto recebida: \"{text_cmd}\"")
                 print(f"🧠 [PROCESSING RESPONSE] Processando mensagem...", flush=True)
                 await websocket.send_json({"type": "llm_status", "status": "generating"})
                 
-                ha_res = await ha_service.parse_and_execute_ha_command(text_cmd)
+                ha_res = await ha_service.parse_and_execute_ha_command(text_cmd, session_id=session_id)
                 if ha_res:
                     full_llm_response = ha_res["message"]
                     await websocket.send_json({"type": "llm_chunk", "text": full_llm_response})
                 else:
+                    history = conversation_service.get_history(session_id)
                     full_llm_response = ""
-                    async for chunk in llm_service.generate_stream(text_cmd):
+                    async for chunk in llm_service.generate_stream(text_cmd, history=history):
                         full_llm_response += chunk
                         await websocket.send_json({
                             "type": "llm_chunk",
                             "text": chunk
                         })
                 
+                conversation_service.add_assistant_message(session_id, full_llm_response.strip())
                 print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+
                 
                 # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
                 if full_llm_response.strip():
