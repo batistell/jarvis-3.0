@@ -1,279 +1,274 @@
-# Jarvis 3.0 - Arquitetura Backend
+# Jarvis 3.0 — Arquitetura Backend
 
-O backend do Jarvis 3.0 é construído em **Python 3.11+** utilizando o framework **FastAPI**, aproveitando a concorrência assíncrona do `asyncio` e bibliotecas nativas de inteligência artificial para interação com o **Ollama**, **faster-whisper** e **Piper TTS**.
+O backend do Jarvis 3.0 é construído em **Python 3.12** utilizando **FastAPI** com concorrência totalmente assíncrona via `asyncio`. Toda a stack de IA (STT, LLM e TTS) roda **nativamente em Python na GPU CUDA local** — sem Ollama, sem Docker, sem servidores externos.
 
 ---
 
 ## 1. Tecnologias & Bibliotecas
 
-*   **Python 3.11+ / 3.12**: Runtime principal aproveitando tipagem moderna (`pydantic` v2, type hints) e melhorias de performance do `asyncio`.
-*   **FastAPI**: Framework web moderno, assíncrono e de alto desempenho para construção de APIs REST, SSE e WebSockets.
-*   **Uvicorn**: Servidor ASGI de alta velocidade alimentado por `uvloop` e `httptools`.
-*   **Ollama Python SDK (`ollama`)**: Cliente assíncrono oficial (`ollama.AsyncClient`) para integração com o modelo Llama 3.
-*   **faster-whisper**: Biblioteca em Python baseada no CTranslate2 e PyTorch para transcrição acelerada de áudio em memória (STT).
-*   **piper-tts**: Motor em Python para síntese de texto em fala de baixíssima latência (TTS).
-*   **SQLAlchemy 2.0 (Async)**: ORM com suporte completo a `asyncio` para persistência de dados.
-*   **httpx**: Cliente HTTP assíncrono para integração com a REST API do Home Assistant.
-*   **PyJWT & cryptography**: Validação criptográfica de tokens JWT do Firebase Auth via chaves públicas JWKS do Google.
+| Biblioteca | Função |
+|---|---|
+| **FastAPI + Uvicorn** | Framework assíncrono + servidor ASGI |
+| **faster-whisper** | STT em GPU CUDA via CTranslate2 (Whisper Large-v3-Turbo) |
+| **ctranslate2** | Runtime de inferência para o Qwen 2.5 3B |
+| **transformers (AutoTokenizer)** | Tokenização do Qwen 2.5 |
+| **edge-tts** | TTS Neural via Microsoft Edge (Remy Multilingual) |
+| **PyJWT + cryptography** | Validação JWT Firebase via JWKS do Google |
+| **SQLAlchemy 2.0 Async** | ORM assíncrono (SQLite / PostgreSQL) |
+| **Alembic** | Migrações de banco de dados |
+| **httpx** | Cliente HTTP assíncrono (Home Assistant) |
+| **numpy** | Conversão e processamento de áudio PCM |
 
 ---
 
-## 2. Integração com Ollama (Llama 3)
+## 2. Configuração (`backend/config.py`)
 
-A integração com o Ollama é configurada através de variáveis de ambiente (`.env`) e instanciada assincronamente:
+Todas as configurações são carregadas de variáveis de ambiente via `python-dotenv`:
 
 ```python
-import os
-from ollama import AsyncClient
+class Settings:
+    # STT — Whisper Large-v3-Turbo: ~1.5GB VRAM, 8x mais rápido que large-v3
+    WHISPER_MODEL: str = "large-v3-turbo"      # ou "large-v3" para máxima precisão
+    WHISPER_DEVICE: str = "cuda"
+    WHISPER_COMPUTE_TYPE: str = "int8_float16"  # Pesos INT8 + acumuladores FP16
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+    # LLM — Qwen 2.5 3B CTranslate2: ~1.9GB VRAM
+    LLM_ENGINE: str = "qwen-native"
+    NATIVE_LLM_MODEL: str = "jncraton/Qwen2.5-3B-Instruct-ct2-int8"
 
-ollama_client = AsyncClient(host=OLLAMA_BASE_URL)
+    # TTS — Voz Neural multilíngue (fala PT, EN, ES, FR, DE, etc.)
+    TTS_ENGINE: str = "edge-tts"
+    TTS_VOICE: str = "fr-FR-RemyMultilingualNeural"
+
+    # VAD
+    VAD_SILENCE_THRESHOLD_RMS: float = 0.015
+    VAD_SILENCE_DURATION_MS: float = 450
+
+    # Segurança
+    FIREBASE_PROJECT_ID: str = "jarvis-1006b"
+    ALLOWED_EMAILS: list[str] = ["batistell.labs@gmail.com", "gbbts@gmail.com"]
+
+    # System Prompt do Assistente
+    JARVIS_SYSTEM_PROMPT: str = "Você é o Jarvis 3.0, ... RESPONDA SEMPRE NO MESMO IDIOMA..."
 ```
 
-O `AsyncClient` permite streaming de respostas de forma totalmente não-bloqueante dentro das rotas do FastAPI ou handlers de WebSockets.
+---
+
+## 3. Arquitetura de Engines (Factory Pattern)
+
+Cada serviço de IA é abstraído por uma interface base e instanciado por uma Factory:
+
+```
+BaseSTTEngine  ←  FasterWhisperEngine  (padrão: large-v3-turbo CUDA)
+                  MockSTTEngine         (testes)
+
+BaseLLMEngine  ←  NativeQwenEngine     (padrão: Qwen 2.5 3B CTranslate2 CUDA)
+                  OllamaEngine          (opcional: Ollama SDK)
+
+BaseTTSEngine  ←  EdgeTTSEngine        (padrão: fr-FR-RemyMultilingualNeural)
+```
 
 ---
 
-## 3. Fluxo Reativo & Endpoint de Stream (Modo Texto / Fallback)
+## 4. STT — Faster-Whisper com Detecção PT/EN (`backend/stt/engines/faster_whisper_engine.py`)
 
-Para interações puramente baseadas em texto ou fallback, o backend disponibiliza um endpoint utilizando **Server-Sent Events (SSE)** através do `EventSourceResponse` (ou `StreamingResponse` nativo do FastAPI).
-
-### Exemplo de Controller / Rota em FastAPI:
+O Whisper Large-v3-Turbo usa um **two-pass** para garantir transcrições apenas em Português e Inglês:
 
 ```python
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from ollama import AsyncClient
-import json
+ALLOWED_LANGUAGES = {"pt", "en"}
 
-app = FastAPI()
-ollama_client = AsyncClient(host="http://localhost:11434")
-
-class ChatRequest(BaseModel):
-    message: str
-
-async def generate_chat_stream(prompt_text: str):
-    response_stream = await ollama_client.chat(
-        model="llama3",
-        messages=[{"role": "user", "content": prompt_text}],
-        stream=True
-    )
+def _pick_allowed_language(self, audio_float32) -> str:
+    # Passo 1: detect_language() retorna dict de probabilidade de TODOS os idiomas
+    lang, all_probs = self.model.detect_language(audio_float32)
     
-    async for chunk in response_stream:
-        content = chunk.get("message", {}).get("content", "")
-        if content:
-            yield f"data: {json.dumps({'content': content})}\n\n"
-
-@app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
-    return StreamingResponse(
-        generate_chat_stream(request.message),
-        media_type="text/event-stream"
-    )
-```
-
----
-
-## 4. Gestão de Memória da Conversa (Contexto)
-
-Para reter o histórico e contexto das mensagens:
-
-*   **Sessão de Conversa**: Armazenada no banco de dados através das tabelas `Conversation` e `Message`.
-*   **Janela de Contexto Ativo**: O backend recupera apenas as últimas N mensagens ativas (ex: últimas 10 mensagens) do banco de dados e as formata na lista de `messages` enviada ao Ollama.
-*   **Limitação de Tokens**: Evita exceder o limite de tokens do Llama 3 mantendo o histórico enxuto e serializável diretamente em objetos JSON do Python.
-
----
-
-## 5. Integração com Home Assistant (Function Calling / Tool Use)
-
-Para permitir que o Jarvis 3.0 controle dispositivos físicos na casa (luzes, interruptores, sensores), utilizaremos o recurso de **Tools / Function Calling** suportado nativamente pelo Ollama em Python e pela API REST do Home Assistant via `httpx`.
-
-### Como funciona o Function Calling em Python:
-1. Definimos o esquema JSON da função aceita pelo Ollama (ferramenta de controle residencial).
-2. O modelo analisa a mensagem do usuário (ex: *"Ligue a luz do quarto"*).
-3. Se identificar a intenção, a resposta do Ollama retorna uma solicitação de chamada de ferramenta (`tool_calls`).
-4. O FastAPI executa a função Python correspondente, enviando um `POST` assíncrono via `httpx` para a API do Home Assistant no Raspberry Pi (`http://<raspberry-pi-ip>:8123/api/services/light/turn_on`).
-5. O resultado da execução é devolvido ao Ollama, que gera a resposta final ao usuário.
-
-### Exemplo de Código em Python:
-
-```python
-import httpx
-import os
-
-HA_URL = os.getenv("HOME_ASSISTANT_URL", "http://192.168.1.100:8123")
-HA_TOKEN = os.getenv("HOME_ASSISTANT_TOKEN", "token_aqui")
-
-tools_schema = [{
-    "type": "function",
-    "function": {
-        "name": "control_home_device",
-        "description": "Controla dispositivos de automação doméstica no Home Assistant",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_id": {"type": "string", "description": "ID da entidade (ex: light.bedroom)"},
-                "action": {"type": "string", "description": "Ação (turn_on ou turn_off)"}
-            },
-            "required": ["entity_id", "action"]
-        }
-    }
-}]
-
-async def execute_home_assistant_tool(entity_id: str, action: str) -> str:
-    domain = entity_id.split(".")[0]
-    headers = {
-        "Authorization": f"Bearer {HA_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    url = f"{HA_URL}/api/services/{domain}/{action}"
+    if lang in self.ALLOWED_LANGUAGES:
+        return lang
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json={"entity_id": entity_id})
-        if response.status_code == 200:
-            return "Comando executado com sucesso."
-        return f"Erro ao executar comando: {response.text}"
+    # Passo 2: Idioma não permitido → força PT ou EN (maior score)
+    pt_score = all_probs.get("pt", 0.0)
+    en_score = all_probs.get("en", 0.0)
+    forced = "pt" if pt_score >= en_score else "en"
+    print(f"🌐 [STT LANG OVERRIDE] '{lang.upper()}' → '{forced.upper()}'")
+    return forced
+
+def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
+    forced_lang = self._pick_allowed_language(audio_float32)
+    segments, info = self.model.transcribe(
+        audio_float32,
+        beam_size=1,
+        vad_filter=True,
+        hallucination_silence_threshold=0.5,
+        no_speech_threshold=0.6,
+        language=forced_lang  # Sempre PT ou EN
+    )
+    return {"text": full_text, "language": forced_lang, "probability": prob}
+```
+
+**Parâmetros de carregamento otimizados para VRAM:**
+```python
+WhisperModel(
+    model_size_or_path="large-v3-turbo",
+    device="cuda",
+    compute_type="int8_float16",
+    cpu_threads=4,
+    num_workers=1,
+    local_files_only=True
+)
 ```
 
 ---
 
-## 6. Processamento de Voz (WebSockets, STT e TTS Nativos)
+## 5. Filtro de Alucinações e Ruído (`backend/services/hallucination_filter.py`)
 
-No Jarvis 3.0, a transmissão de voz é realizada via **WebSocket** em `/ws/voice`. A transcrição (STT) e a síntese (TTS) rodam **diretamente dentro do ecossistema Python**, eliminando chamadas HTTP para serviços externos de áudio.
-
-### Fluxo no WebSocket Handler:
-1. **Conexão Estabelecida**: O cliente abre a conexão WebSocket em `/ws/voice?token=JWT`.
-2. **Recebimento de Áudio (STT em Memória com faster-whisper)**:
-   - O cliente envia amostras de **áudio PCM linear bruto** (16000 Hz, 16-bit, Mono) como dados binários (`bytes`).
-   - O backend acumula os `bytes` em um buffer de memória (`io.BytesIO`).
-   - Quando o sinalizador `"SPEECH_END"` é recebido, os bytes PCM acumulados são convertidos para um array NumPy e passados diretamente para o modelo `faster_whisper.WhisperModel.transcribe()` em memória.
-3. **Geração e Síntese (LLM + Piper TTS)**:
-   - O texto transcrito é enviado ao Ollama.
-   - Conforme cada trecho/frase de texto é recebido do Ollama em streaming, a frase é sintetizada pelo **Piper TTS** em memória.
-   - Os `bytes` do áudio sintetizado (WAV/PCM) são transmitidos via WebSocket como dados binários (`bytes`), juntamente com os tokens de texto JSON.
-
-### Exemplo do Handler de WebSocket em FastAPI:
+Pipeline de limpeza aplicado a cada transcrição do Whisper:
 
 ```python
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
-import io
-import numpy as np
-from faster_whisper import WhisperModel
-from ollama import AsyncClient
+class HallucinationFilter:
+    # 1. Set exato de ~80 frases fantasma que o Whisper alucina em silêncio:
+    #    "thank you", "ok", "bye", "never mind", "i love you", "[inaudible]", etc.
+    PHANTOM_EXACT = {"thank you", "thank you.", "never mind", ...}
+    
+    # 2. Regex para padrões mais longos:
+    #    legenda por..., subtitles by..., [texto entre colchetes], ♪...♪, etc.
+    PHANTOM_PATTERNS = [re.compile(r'...',)]
+    
+    # 3. Filtro de ruído: < 3 chars alfanuméricos reais, ou apenas tokens de ruído
+    @classmethod
+    def _is_noise(cls, text: str) -> bool: ...
+    
+    @classmethod
+    def clean_text(cls, text: str) -> str:
+        # 1. Exato → 2. Regex → 3. Ruído → 4. Wakeword variants → 5. Fuzzy Jarvis
+```
 
-app = FastAPI()
+**Variantes fonéticas corrigidas para "Jarvis":**
+`gervis`, `garvis`, `jesus`, `javi`, `jair`, `jardim`, `jairis`, `jarviz`, `jabes`, `gervais`, `jarver`, e outras.
 
-# Inicializa modelos em memória
-whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
-ollama_client = AsyncClient(host="http://localhost:11434")
+---
 
-@app.websocket("/ws/voice")
-async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
-    # 1. Valida token JWT do Firebase (ver Seção 7)
-    user_email = await validate_firebase_jwt(token)
-    if not user_email:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+## 6. LLM — Qwen 2.5 3B Nativo (`backend/llm/engines/native_qwen_engine.py`)
 
-    await websocket.accept()
-    audio_buffer = bytearray()
+Inferência 100% local em Python sem Ollama:
 
-    try:
-        while True:
-            message = await websocket.receive()
-            
-            if "bytes" in message and message["bytes"]:
-                # Dados binários PCM recebidos
-                audio_buffer.extend(message["bytes"])
-                
-            elif "text" in message and message["text"] == "SPEECH_END":
-                # Converte buffer PCM de 16-bit para float32 numpy array
-                raw_pcm = bytes(audio_buffer)
-                audio_buffer.clear()
-                
-                audio_np = np.frombuffer(raw_pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                
-                # Transcreve via faster-whisper nativo
-                segments, _ = whisper_model.transcribe(audio_np, beam_size=5)
-                transcribed_text = " ".join([segment.text for segment in segments]).strip()
-                
-                if not transcribed_text:
-                    continue
-                
-                # Transmite o texto transcrito ao cliente
-                await websocket.send_json({"type": "stt_result", "text": transcribed_text})
-                
-                # Streaming da LLM
-                response_stream = await ollama_client.chat(
-                    model="llama3",
-                    messages=[{"role": "user", "content": transcribed_text}],
-                    stream=True
-                )
-                
-                async for chunk in response_stream:
-                    token_content = chunk.get("message", {}).get("content", "")
-                    if token_content:
-                        # Envia o token de texto
-                        await websocket.send_json({"type": "text_token", "content": token_content})
-                        
-                        # Sintetiza com Piper TTS e envia os bytes do áudio sintetizado
-                        # audio_bytes = tts_engine.synthesize(token_content)
-                        # await websocket.send_bytes(audio_bytes)
+```python
+self.generator = ctranslate2.Generator(
+    model_dir,
+    device="cuda",
+    compute_type="int8_float16",  # ~1.9GB VRAM
+    inter_threads=1,              # Stream CUDA único (economia de VRAM)
+    intra_threads=4,
+    max_queued_batches=1
+)
+```
 
-    except WebSocketDisconnect:
-        print("Cliente desconectado do canal de voz.")
+**Instrução dinâmica de idioma** — o idioma detectado pelo Whisper é injetado no system prompt:
+
+```python
+lang_prompt = (
+    f"{settings.JARVIS_SYSTEM_PROMPT}\n"
+    f"Instrução Estrita de Idioma: O usuário falou no idioma '{detected_lang.upper()}'. "
+    f"Você DEVE responder obrigatoriamente no idioma '{detected_lang.upper()}'."
+)
+async for chunk in llm_service.generate_stream(text, system_prompt=lang_prompt):
+    ...
 ```
 
 ---
 
-## 7. Segurança e Autenticação (Firebase JWT & Allowed Emails)
+## 7. TTS — Edge-TTS Remy Multilingual (`backend/tts/engines/edge_tts_engine.py`)
 
-O backend FastAPI implementa a verificação criptográfica de tokens JWT emitidos pelo Firebase Authentication (Google Provider) usando as chaves públicas vigentes publicadas no JWKS da Google.
-
-### Parâmetros de Segurança (`.env`):
-```env
-FIREBASE_PROJECT_ID=jarvis-1006b
-ALLOWED_EMAILS=batistell.labs@gmail.com,gbbts@gmail.com,gbbtstll@gmail.com
-```
-
-### Validador de Token JWT em Python:
+A síntese é feita via `edge-tts` em memória e o áudio MP3 é enviado ao cliente via WebSocket:
 
 ```python
-import jwt
-from jwt import PyJWKClient
-import os
+communicate = edge_tts.Communicate(text.strip(), "fr-FR-RemyMultilingualNeural")
+buffer = io.BytesIO()
+async for chunk in communicate.stream():
+    if chunk["type"] == "audio":
+        buffer.write(chunk["data"])
+audio_bytes = buffer.getvalue()  # MP3 bytes
 
-FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "jarvis-1006b")
-ALLOWED_EMAILS = [e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()]
+# Enviado como Base64 pelo WebSocket:
+await websocket.send_json({
+    "type": "tts_audio",
+    "audio": base64.b64encode(audio_bytes).decode()
+})
+```
+
+O **cliente** decodifica o Base64 e toca o áudio via `AudioContext` (Web Audio API).  
+O áudio **não toca na máquina host** — toca no browser do dispositivo conectado.
+
+---
+
+## 8. Monitoramento de Saúde da GPU (`backend/services/health_service.py`)
+
+Endpoints REST para diagnóstico de performance em tempo real:
+
+```
+GET  /api/health    → VRAM, temperatura, carga CUDA + latências STT/LLM/TTS
+POST /api/health/gc → Força coleta de lixo e limpeza de VRAM
+```
+
+**Resposta JSON:**
+```json
+{
+  "gpu": {
+    "gpu_name": "NVIDIA GeForce RTX 3060",
+    "vram_total_mb": 12288,
+    "vram_used_mb": 4464,
+    "vram_used_percent": 36.3,
+    "gpu_utilization_percent": 12,
+    "temperature_c": 51,
+    "status": "OPTIMAL"
+  },
+  "models": {
+    "stt": { "model_name": "large-v3-turbo", "latency_ms": 485 },
+    "llm": { "model_name": "jncraton/Qwen2.5-3B-Instruct-ct2-int8", "latency_ms": 820 },
+    "tts": { "voice": "fr-FR-RemyMultilingualNeural", "latency_ms": 220 }
+  }
+}
+```
+
+---
+
+## 9. WebSocket de Voz (`/ws/voice`)
+
+### Fluxo Completo por Turno de Voz:
+
+```
+[Microfone]  →  PCM chunks (200ms)  →  [WebSocket]
+                                          ↓
+                                     BackendVADDetector (RMS)
+                                          ↓ (pausa detectada)
+                                    FasterWhisperEngine.transcribe_pcm_with_info()
+                                     → detect_language (PT/EN)
+                                     → transcribe(language=forced_lang)
+                                     → HallucinationFilter.clean_text()
+                                          ↓ (texto limpo)
+                                    NativeQwenEngine.generate_stream(text, lang_prompt)
+                                     → ctranslate2.Generator (streamed tokens)
+                                          ↓ (resposta completa)
+                                    EdgeTTSEngine.synthesize(response)
+                                     → edge-tts MP3 bytes → Base64
+                                          ↓
+                                     [WebSocket] → [AudioContext] → 🔊 Fala no Browser
+```
+
+---
+
+## 10. Segurança e Autenticação
+
+O backend valida o ID Token do Firebase via **JWKS** do Google sem necessidade de service account:
+
+```python
 JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
-
 jwk_client = PyJWKClient(JWKS_URL)
 
-async def validate_firebase_jwt(token_string: str) -> str:
-    try:
-        signing_key = jwk_client.get_signing_key_from_jwt(token_string)
-        payload = jwt.decode(
-            token_string,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=FIREBASE_PROJECT_ID,
-            issuer=f"https://securetoken.google.com/{FIREBASE_PROJECT_ID}"
-        )
-        
-        email = payload.get("email")
-        email_verified = payload.get("email_verified", False)
-        
-        if not email or not email_verified:
-            raise ValueError("E-mail ausente ou não verificado.")
-            
-        if email not in ALLOWED_EMAILS:
-            raise ValueError(f"E-mail {email} não está na whitelist autorizada.")
-            
+async def validate_firebase_token(token: str) -> str | None:
+    signing_key = jwk_client.get_signing_key_from_jwt(token)
+    payload = jwt.decode(token, signing_key.key, algorithms=["RS256"],
+                         audience=FIREBASE_PROJECT_ID, ...)
+    email = payload.get("email")
+    if email in settings.ALLOWED_EMAILS:
         return email
-    except Exception as e:
-        print(f"Erro na validação do token JWT: {e}")
-        return None
+    return None  # Rejeita conexão WebSocket com código 1008
 ```

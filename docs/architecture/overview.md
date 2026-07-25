@@ -1,47 +1,111 @@
-# Jarvis 3.0 - Visão Geral da Arquitetura
+# Jarvis 3.0 — Visão Geral da Arquitetura
 
-Este documento apresenta a visão técnica geral do **Jarvis 3.0**, um assistente pessoal inteligente construído com foco em interações por voz e texto em tempo real em **Python**, utilizando o framework assíncrono **FastAPI**, modelos de linguagem locais via **Ollama**, automação residencial via **Home Assistant**, síntese e reconhecimento de voz nativos em memória e segurança criptográfica via **Firebase Auth**.
+O Jarvis 3.0 roda **100% localmente** na máquina do usuário. Toda a pipeline de IA processa na **GPU CUDA local** sem chamadas a APIs externas. O acesso à interface web é protegido por Firebase Authentication.
 
 ---
 
-## 1. Visão Geral do Sistema
-
-O Jarvis 3.0 roda localmente na rede doméstica do usuário. O acesso à interface web e ao backend é protegido por autenticação **Firebase Authentication** integrada ao provedor de identidade do Google. O backend FastAPI valida a assinatura digital do ID Token do Firebase (via JWKS) e restringe o acesso estritamente aos e-mails autorizados (ex: `batistell.labs@gmail.com`), interagindo com o Ollama local e comandando o Home Assistant em um Raspberry Pi.
+## 1. Diagrama de Componentes
 
 ```mermaid
 graph TD
-    User([Usuário]) <-->|Voz / Texto / HTTP| FE[React Frontend]
-    FE <-->|1. Stream de Áudio / WebSockets| BE[FastAPI Backend]
-    BE <-->|Autenticação Google| FB[Firebase Auth / OIDC]
-    BE <-->|2. Comandos Assíncronos / httpx| HA[Home Assistant (Raspberry Pi)]
-    BE <-->|3. Áudio p/ Texto / Nativo em Memória| STT[faster-whisper (Python)]
-    BE <-->|4. Texto p/ LLM / Ollama Python SDK| OL[Ollama Service]
-    OL <-->|5. Chat / Tool Calls| LLM[Llama 3 Model]
-    BE -->|6. Texto p/ Áudio / Nativo em Memória| TTS[Piper TTS (Python)]
+    User([Usuário]) <-->|Voz + Texto| FE[React Frontend - Vite]
+    FE <-->|WebSocket binário bidirecional| BE[FastAPI Backend]
+    BE <-->|JWT / JWKS| FB[Firebase Auth - Google]
+
+    subgraph GPU CUDA Local
+        BE --> STT[FasterWhisperEngine\nlarge-v3-turbo int8_float16]
+        BE --> LLM[NativeQwenEngine\nQwen 2.5 3B CTranslate2 int8]
+        BE --> TTS[EdgeTTSEngine\nRemy Multilingual Neural]
+    end
+
+    BE -.->|Base64 MP3 via WS| FE
+    FE -.->|Web Audio API AudioContext| Speaker([🔊 Browser])
 ```
 
 ---
 
-## 2. Fluxo de Autenticação e Voz
+## 2. Fluxo de uma Interação por Voz
 
-1. **Autenticação Inicial (Frontend)**: O usuário tenta acessar a interface web local. Ele é direcionado para a autenticação do Firebase (Google Provider).
-2. **Geração do Token**: O Firebase autentica o usuário e emite um ID Token JWT assinado pelo Google.
-3. **Estabelecimento de Conexão WebSocket**:
-   - O React Frontend estabelece conexão via WebSocket (`ws://localhost:8000/ws/voice?token=JWT_TOKEN`).
-   - O FastAPI intercepta a requisição de handshake no endpoint WebSocket, decodifica o JWT do Firebase, valida a assinatura contra as chaves públicas da Google (JWKS URI), verifica se o e-mail está na lista de e-mails permitidos (ex: `batistell.labs@gmail.com`) e se foi verificado (`email_verified == true`).
-   - Se aprovado, a conexão assíncrona bidirecional é liberada.
-4. **Fluxo de Voz Contínuo**: A transmissão e reprodução do áudio ocorrem sob este canal seguro conforme descrito no fluxo de voz padrão.
+```
+[Microfone do Browser]
+       │ PCM 16-bit Mono 16kHz (chunks 200ms via WebSocket)
+       ↓
+[BackendVADDetector]  ← threshold RMS + janela de silêncio
+       │ (pausa detectada após fala)
+       ↓
+[FasterWhisperEngine]  — large-v3-turbo, CUDA, int8_float16
+  ├── detect_language(audio)  →  {pt: 0.92, en: 0.05, ...}
+  ├── força idioma a PT ou EN  (ALLOWED_LANGUAGES = {"pt", "en"})
+  ├── transcribe(language=forced_lang, vad_filter=True, ...)
+  └── HallucinationFilter.clean_text()  →  filtra "Thank you", ruído, etc.
+       │ texto limpo + detected_lang
+       ↓
+[NativeQwenEngine]  — Qwen 2.5 3B, CTranslate2, CUDA, int8_float16
+  ├── system_prompt + instrução de idioma forçado
+  └── generate_stream()  →  tokens em streaming via WebSocket (llm_chunk)
+       │ resposta completa
+       ↓
+[EdgeTTSEngine]  — fr-FR-RemyMultilingualNeural
+  └── synthesize(text)  →  MP3 bytes  →  Base64  →  WebSocket (tts_audio)
+       │
+       ↓
+[AudioContext no Browser]  →  🔊 Fala no dispositivo cliente
+```
 
 ---
 
-## 3. Requisitos de Ambiente
+## 3. Payloads WebSocket
 
-Para o funcionamento completo da arquitetura local, a máquina de desenvolvimento/hospedagem deve atender aos seguintes requisitos:
+### Backend → Frontend
 
-*   **Python 3.11+ / 3.12**: Interpretador e ecossistema de dependências.
-*   **Ollama**: Instalado e rodando como serviço em `http://localhost:11434` com o modelo `llama3`.
-*   **Biblioteca STT (faster-whisper)**: Execução nativa de transcrição de voz em memória GPU/CPU via CTranslate2/PyTorch.
-*   **Biblioteca TTS (piper-tts / kokoro-onnx)**: Motor nativo de síntese de voz em Python.
-*   **Home Assistant**: Servidor local (Raspberry Pi) configurado com token de acesso de longa duração.
-*   **Firebase Project**: Configurado na nuvem (`jarvis-1006b`) para realizar o login social Google.
-*   **Node.js v18+**: Para compilação e execução do frontend React/Vite.
+| type | Campos | Descrição |
+|---|---|---|
+| `stt_status` | `status: "transcribing"` | Whisper iniciou transcrição |
+| `stt_result` | `text, user, language` | Texto final transcrito + idioma detectado |
+| `partial_stt` | `text` | Transcrição parcial em tempo real |
+| `llm_status` | `status: "generating"` | Qwen iniciou geração |
+| `llm_chunk` | `text` | Token de streaming do LLM |
+| `llm_result` | `text` | Resposta completa do LLM |
+| `tts_audio` | `audio: "<base64_mp3>"` | Áudio sintetizado (MP3 em Base64) |
+
+### Frontend → Backend
+
+| Formato | Descrição |
+|---|---|
+| `bytes` (binário) | Chunk de áudio PCM 16-bit Mono 16kHz |
+| `{"type": "text_message", "text": "..."}` | Mensagem digitada pelo usuário |
+
+---
+
+## 4. Endpoints REST
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/` | Status geral do backend |
+| `WS` | `/ws/voice?token=JWT` | WebSocket bidirecional de voz |
+| `GET` | `/api/health` | VRAM, temperatura, carga CUDA, latências STT/LLM/TTS |
+| `POST` | `/api/health/gc` | Coleta de lixo forçada + limpeza de VRAM |
+
+---
+
+## 5. Uso de VRAM (RTX 3060 12GB)
+
+| Modelo | VRAM |
+|---|---|
+| Whisper Large-v3-Turbo (int8_float16) | ~1.5 GB |
+| Qwen 2.5 3B int8 (CTranslate2) | ~1.9 GB |
+| **Total Jarvis** | **~3.4 GB** |
+| Windows WDDM (Chrome, Discord, IDE...) | ~7–8 GB |
+| **Total típico** | **~11–12 GB** |
+
+> O alto consumo de VRAM vem do Windows WDDM e apps gráficos (Chrome, Discord, Edge), não dos modelos de IA.
+
+---
+
+## 6. Requisitos
+
+- **Python 3.12** com CUDA toolkit compatível (CUDA 13.x, driver 591+)
+- **Node.js 18+** para compilação do frontend React/Vite
+- **NVIDIA GPU** com 8GB+ VRAM (testado: RTX 3060 12GB)
+- **Firebase Project** configurado com Google Sign-In ativo
+- **Conexão à internet** apenas para TTS (Edge-TTS usa API da Microsoft) e autenticação Firebase
