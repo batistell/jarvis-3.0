@@ -425,12 +425,28 @@ class HAService:
 
 
         if not action:
+            # Se não detectou um verbo de comando, checa se há uma intenção pendente aguardando a especificação do cômodo
+            pending_act = conversation_service.get_pending_action(session_id)
+            if pending_act:
+                target_clean = re.sub(r'[\?\.\!\,]', '', text_clean)
+                target_clean = re.sub(r'\b(por\s+favor|agora|jarvis|gentileza|do|da|de|no|na)\b', '', target_clean).strip()
+                resolved_entity = await self.find_entity_by_name(target_clean, domain=pending_act.get("domain", "light"))
+                if resolved_entity:
+                    action = pending_act["action"]
+                    domain = resolved_entity.split(".")[0]
+                    conversation_service.clear_pending_action(session_id)
+                    print(f"🧠 [PENDING INTENT RESOLVED] Aplicando comando pendente '{action}' ao cômodo '{target_clean}' -> entity_id='{resolved_entity}'", flush=True)
+                    return await self.control_device_with_feedback(
+                        domain=domain,
+                        action=action,
+                        entity_id=resolved_entity,
+                        session_id=session_id
+                    )
             return None
 
         # Limpeza do termo alvo e advérbios de repetição/cortesia
         target_clean = re.sub(r'[\?\.\!\,]', '', raw_target)
         target_clean = re.sub(r'\b(por\s+favor|agora|jarvis|gentileza|de\s+novo|denovo|novamente)\b', '', target_clean).strip()
-
 
         target_norm = _normalize_text(target_clean)
 
@@ -444,6 +460,8 @@ class HAService:
                 friendly = last_dev["friendly_name"]
                 print(f"🧠 [ANAPHORA RESOLUTION] Mapeado termo pronominal '{target_clean or 'omitido'}' para o último dispositivo do contexto: '{friendly}' ({entity_id})", flush=True)
             else:
+                # Registra o comando como pendente para aguardar o complemento do cômodo no próximo turno
+                conversation_service.set_pending_action(session_id, action=action, domain="light")
                 msg = "Não sei a qual luz ou dispositivo você está se referindo. Por favor especifique o cômodo (ex: 'escritório', 'sala')."
                 print(f"⚠️ [ANAPHORA RESOLUTION] {msg}", flush=True)
                 return {
@@ -452,8 +470,11 @@ class HAService:
                     "message": msg
                 }
         else:
+            # Limpa qualquer ação pendente pois um comando completo foi fornecido
+            conversation_service.clear_pending_action(session_id)
             # Tenta resolver a entidade no HA com tradução PT-BR <-> EN e filtro de domínios
             entity_id = await self.find_entity_by_name(target_clean, domain="light")
+
 
         if not entity_id:
             available = await self.list_entities()
