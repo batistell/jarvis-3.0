@@ -88,7 +88,14 @@ class NativeQwenEngine(BaseLLMEngine):
                 compute_type = getattr(settings, "WHISPER_COMPUTE_TYPE", "float16")
                 
                 try:
-                    self.generator = ctranslate2.Generator(model_dir, device=device, compute_type=compute_type)
+                    self.generator = ctranslate2.Generator(
+                        model_dir,
+                        device=device,
+                        compute_type="int8_float16",  # INT8 pesos + FP16 acumuladores (menor VRAM, maior velocidade)
+                        inter_threads=1,              # Um único stream CUDA partilhado (economiza 200-400MB de VRAM)
+                        intra_threads=4,              # Threads internas por operação
+                        max_queued_batches=1          # Não acumula batches em memória desnecessários
+                    )
                     print("=" * 65)
                     print(f"🚀 [NATIVE QWEN READY] Qwen 2.5 3B pronto em GPU CUDA!")
                     print("=" * 65, flush=True)

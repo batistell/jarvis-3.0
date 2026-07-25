@@ -54,7 +54,11 @@ class FasterWhisperEngine(BaseSTTEngine):
                 self.model = WhisperModel(
                     settings.WHISPER_MODEL,
                     device=settings.WHISPER_DEVICE,
-                    compute_type=settings.WHISPER_COMPUTE_TYPE
+                    compute_type=settings.WHISPER_COMPUTE_TYPE,
+                    cpu_threads=4,       # Threads CPU para pré/pós-processamento (libera GPU)
+                    num_workers=1,       # Workers de I/O do CTranslate2
+                    download_root=None,
+                    local_files_only=True  # Zero verificações HuggingFace na rede
                 )
                 print("=" * 65)
                 print(f"🚀 [WHISPER ULTRA-FAST READY] Modelo '{settings.WHISPER_MODEL}' pronto em GPU CUDA!")

@@ -10,10 +10,12 @@ class Settings:
     # Seleção de Motor STT ("faster-whisper", "mock", etc)
     STT_ENGINE: str = os.getenv("STT_ENGINE", "faster-whisper")
     
-    # STT Faster Whisper (Large-v3 completo + CUDA por padrão para máxima precisão)
-    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3")
+    # STT Faster Whisper
+    # Opções: "large-v3" (3.1GB VRAM, máxima precisão), "large-v3-turbo" (1.5GB VRAM, 8x mais rápido, preciso igual)
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cuda")
-    WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
+    # int8_float16 = pesos INT8 + acumuladores FP16 → menor VRAM, mais rápido que pure float16
+    WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "int8_float16")
     WHISPER_INITIAL_PROMPT: str | None = os.getenv("WHISPER_INITIAL_PROMPT", None)
     
     # Seleção e Configuração de Motor LLM (Nativo Python em Memória, Ollama, Qwen2.5)
