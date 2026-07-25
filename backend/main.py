@@ -428,8 +428,9 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             if tts_buffer.strip():
                                 await _flush_tts(tts_buffer)
 
-                             llm_elapsed = (time.time() - llm_start_t) * 1000.0
+                            llm_elapsed = (time.time() - llm_start_t) * 1000.0
                             health_service.record_llm_latency(llm_elapsed)
+
 
                             # Guardrail Anti-Alucinação: se o LLM tentar imitar confirmação de hardware no stream de voz
                             reply_lower = full_llm_response.lower()

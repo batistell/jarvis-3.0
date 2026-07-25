@@ -32,10 +32,29 @@ export const useVoiceRecorder = () => {
 
       setAudioDevices(audioInputs);
       
-      // Define dispositivo padrão se nenhum selecionado
+      // Seleção inteligente: Prioriza Headsets / Fones e ignora Webcams na inicialização
       if (audioInputs.length > 0 && !selectedDeviceId) {
-        setSelectedDeviceId(audioInputs[0].deviceId);
+        let bestDevice = audioInputs.find((d) => {
+          const label = d.label.toLowerCase();
+          const isHeadset = /headset|headphone|fone|handset|hands-free|bluetooth|comunica[çc]ões|communications|usb audio|fifine|hyperx|logitech|razer|corsair|redragon/i.test(label);
+          const isWebcam = /webcam|cam|câmera|camera|integrated|integrado/i.test(label);
+          return isHeadset && !isWebcam;
+        });
+
+        if (!bestDevice) {
+          bestDevice = audioInputs.find((d) => {
+            const label = d.label.toLowerCase();
+            return !/webcam|cam|câmera|camera|integrated|integrado/i.test(label);
+          });
+        }
+
+        const chosen = bestDevice || audioInputs[0];
+        if (chosen) {
+          console.log(`🎤 [AUDIO SELECTION] Microfone auto-selecionado: "${chosen.label}" (${chosen.deviceId})`);
+          setSelectedDeviceId(chosen.deviceId);
+        }
       }
+
     } catch (err) {
       console.warn('⚠️ Não foi possível enumerar os microfones:', err);
     }
