@@ -16,7 +16,7 @@ class Settings:
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
     WHISPER_INITIAL_PROMPT: str = os.getenv(
         "WHISPER_INITIAL_PROMPT",
-        "Jarvis assistente virtual de inteligência artificial local. comandos de voz em português e inglês."
+        "Jarvis, Batistell."
     )
     
     # Seleção e Configuração de Motor LLM (Nativo Python em Memória, Ollama, Qwen2.5)

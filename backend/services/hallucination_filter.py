@@ -35,10 +35,15 @@ class HallucinationFilter:
 
         cleaned = text.strip()
 
-        # 1. Filtra frases fantasma de legendas do Whisper
+        # 1. Filtra frases fantasma de legendas do Whisper e ecos do prompt inicial
         for pattern in cls.PHANTOM_PATTERNS:
             if pattern.search(cleaned):
                 return ""
+
+        # Remove vazamento de trechos do prompt inicial caso ocorram
+        cleaned = re.sub(r'comandos de voz em português e inglês\.?', '', cleaned, flags=re.IGNORECASE).strip()
+        if not cleaned:
+            return ""
 
         # 2. Normaliza variações fonéticas diretas para 'Jarvis'
         cleaned = cls.WAKEWORD_VARIANTS.sub("Jarvis", cleaned)
