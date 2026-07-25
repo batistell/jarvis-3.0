@@ -1,5 +1,6 @@
 import sys
 import io
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from backend.services.vad_service import BackendVADDetector
 from backend.services.stt_service import stt_service
 from backend.services.llm_service import llm_service
 from backend.services.tts_service import tts_service
+from backend.services.health_service import health_service
 
 # Garantir codificação UTF-8 no stdout/stderr no Windows
 if hasattr(sys.stdout, 'buffer') and getattr(sys.stdout, 'encoding', '').lower() != 'utf-8':
@@ -60,8 +62,6 @@ async def root():
         "model": settings.WHISPER_MODEL,
         "engine": "Python FastAPI + faster-whisper + Qwen 2.5 Native"
     }
-
-from backend.services.health_service import health_service
 
 @app.get("/api/health")
 async def get_health_check():
