@@ -1,5 +1,6 @@
 import sys
 import io
+import re
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
@@ -12,6 +13,9 @@ from backend.services.stt_service import stt_service
 from backend.services.llm_service import llm_service
 from backend.services.tts_service import tts_service
 from backend.services.health_service import health_service
+
+# Regex para extrair sentenças completas do stream de tokens do LLM
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?;:\n])\s+')
 
 # Garantir codificação UTF-8 no stdout/stderr no Windows
 if hasattr(sys.stdout, 'buffer') and getattr(sys.stdout, 'encoding', '').lower() != 'utf-8':
@@ -160,32 +164,55 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
 
                         print(f"🧠 [LLM GENERATING] Processando no Qwen 2.5 (Idioma detectado pelo Whisper: {detected_lang.upper()})...", flush=True)
                         await websocket.send_json({"type": "llm_status", "status": "generating"})
-                        
+
+                        # --- Sentence-Streaming TTS ---
+                        # Sintetiza e envia cada frase ao cliente mal o LLM a termina,
+                        # reduzindo a latência percebida do TTS de ~1.5s para ~300ms.
                         llm_start_t = time.time()
                         full_llm_response = ""
-                        async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
-                            full_llm_response += chunk
-                            await websocket.send_json({
-                                "type": "llm_chunk",
-                                "text": chunk
-                            })
-                        llm_elapsed = (time.time() - llm_start_t) * 1000.0
-                        health_service.record_llm_latency(llm_elapsed)
-                        
-                        print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
-                        
-                        # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
-                        if full_llm_response.strip():
+                        tts_buffer = ""        # Acumula tokens até ter uma frase completa
+                        first_audio_sent = False
+
+                        async def _flush_tts(sentence: str) -> None:
+                            """Sintetiza uma frase e envia o áudio pelo WebSocket imediatamente."""
+                            nonlocal first_audio_sent
+                            sentence = sentence.strip()
+                            if not sentence:
+                                return
+                            tts_t = time.time()
                             try:
-                                audio_bytes = await tts_service.synthesize_async(full_llm_response.strip())
+                                audio_bytes = await tts_service.synthesize_async(sentence)
                                 if audio_bytes:
                                     audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                                    await websocket.send_json({
-                                        "type": "tts_audio",
-                                        "audio": audio_b64
-                                    })
+                                    await websocket.send_json({"type": "tts_audio", "audio": audio_b64})
+                                    elapsed_tts = (time.time() - tts_t) * 1000.0
+                                    health_service.record_tts_latency(elapsed_tts)
+                                    if not first_audio_sent:
+                                        first_audio_sent = True
+                                        print(f"🔊 [TTS FIRST CHUNK] {elapsed_tts:.0f}ms → \"{sentence[:40]}...\"", flush=True)
                             except Exception as tts_err:
-                                print(f"⚠️ [TTS ERROR] Falha ao sintetizar áudio TTS: {tts_err}", flush=True)
+                                print(f"⚠️ [TTS ERROR] {tts_err}", flush=True)
+
+                        async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
+                            full_llm_response += chunk
+                            tts_buffer += chunk
+                            await websocket.send_json({"type": "llm_chunk", "text": chunk})
+
+                            # Verifica se o buffer já contém ao menos uma frase terminada
+                            parts = _SENTENCE_SPLIT_RE.split(tts_buffer)
+                            if len(parts) > 1:
+                                # As partes exceto a última estão completas → sintetiza cada uma
+                                for sentence in parts[:-1]:
+                                    await _flush_tts(sentence)
+                                tts_buffer = parts[-1]  # Guarda o fragmento incompleto
+
+                        # Sintetiza o fragmento final (última frase sem pontuação de fim)
+                        if tts_buffer.strip():
+                            await _flush_tts(tts_buffer)
+
+                        llm_elapsed = (time.time() - llm_start_t) * 1000.0
+                        health_service.record_llm_latency(llm_elapsed)
+                        print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
 
                         await websocket.send_json({
                             "type": "llm_result",
