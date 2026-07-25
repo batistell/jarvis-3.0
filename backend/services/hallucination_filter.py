@@ -40,15 +40,23 @@ class HallucinationFilter:
         "♪", "♪♪", "♫", "[music]", "[applause]", "[laughter]",
         "[inaudible]", "[silence]", "[noise]", "[background noise]",
         "subtítulos realizados por la comunidad de amara.org",
-        # PT — alucinações comuns
-        "obrigado", "obrigado.", "obrigada", "obrigada.", "de nada", "de nada.",
-        "com licença", "com licença.", "por favor", "por favor.", "sim", "sim.",
-        "não", "não.", "ok.", "tá", "tá.", "tudo bem", "tudo bem.",
-        "até logo", "até logo.", "tchau", "tchau.", "oi", "oi.", "olá", "olá.",
+        # PT — fillers e saudações curtas que Whisper alucina em silêncio/ruído
+        "e aí", "e aí?", "e aí.", "e ai", "e ai?", "e ai.",
+        "oi", "oi.", "olá", "olá.", "oi tudo bem", "oi tudo bem?",
+        "e aí tudo bem", "e aí tudo bem?", "e aí, tudo bem?",
+        "tudo bem", "tudo bem?", "tudo bem.", "tudo bom", "tudo bom?", "tudo bom.",
+        "obrigado", "obrigado.", "obrigada", "obrigada.",
+        "de nada", "de nada.", "com licença", "com licença.",
+        "por favor", "por favor.", "sim", "sim.", "não", "não.",
+        "ok.", "tá", "tá.", "tá bom", "tá bom.", "ta bom", "ta bom.",
+        "até logo", "até logo.", "tchau", "tchau.", "até mais", "até mais.",
         "obrigado por assistir", "inscreva-se no canal", "curta o vídeo",
         "deixe seu comentário", "ative o sininho",
+        "certo", "certo.", "entendido", "entendido.", "ok entendi", "ok, entendi.",
+        "humhum", "hum hum", "hum hum.", "hm", "hm.", "é", "é.",
+        "então", "então.", "bom", "bom.", "legal", "legal.", "ótimo", "ótimo.",
         # Cyrillics / outros idiomas alucinados em silêncio longo
-        "продолжение следует", "印刷",
+        "продолжение следует", "印刷", "спасибо", "спасибо.",
     }
 
     # Padrões regex para frases mais longas de alucinação
