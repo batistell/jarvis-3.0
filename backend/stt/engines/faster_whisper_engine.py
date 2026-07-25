@@ -98,7 +98,7 @@ class FasterWhisperEngine(BaseSTTEngine):
                 condition_on_previous_text=False,
                 hallucination_silence_threshold=0.5,
                 no_speech_threshold=0.6,
-                initial_prompt=settings.WHISPER_INITIAL_PROMPT,
+                initial_prompt=settings.WHISPER_INITIAL_PROMPT if settings.WHISPER_INITIAL_PROMPT else None,
                 language=None  # Detecção automática multilíngue do Large-v3!
             )
 
@@ -141,7 +141,7 @@ class FasterWhisperEngine(BaseSTTEngine):
                 beam_size=1,
                 vad_filter=False,
                 condition_on_previous_text=False,
-                initial_prompt=settings.WHISPER_INITIAL_PROMPT,
+                initial_prompt=settings.WHISPER_INITIAL_PROMPT if settings.WHISPER_INITIAL_PROMPT else None,
                 language=None
             )
             fragments = [seg.text.strip() for seg in segments if seg.text.strip()]

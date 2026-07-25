@@ -14,10 +14,7 @@ class Settings:
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cuda")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
-    WHISPER_INITIAL_PROMPT: str = os.getenv(
-        "WHISPER_INITIAL_PROMPT",
-        "Jarvis, Batistell."
-    )
+    WHISPER_INITIAL_PROMPT: str | None = os.getenv("WHISPER_INITIAL_PROMPT", None)
     
     # Seleção e Configuração de Motor LLM (Nativo Python em Memória, Ollama, Qwen2.5)
     LLM_ENGINE: str = os.getenv("LLM_ENGINE", "qwen-native")
