@@ -16,5 +16,9 @@ class MockSTTEngine(BaseSTTEngine):
         print("🛠️ [STT MOCK] Transcrevendo áudio mock...")
         return "Mensagem de teste do motor STT Mock"
 
+    def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
+        text = self.transcribe_pcm(pcm_bytes)
+        return {"text": text, "language": "pt", "probability": 1.0}
+
     def transcribe_partial_pcm(self, pcm_bytes: bytes) -> str:
         return "Testando..."

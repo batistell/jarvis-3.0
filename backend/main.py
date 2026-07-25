@@ -122,21 +122,30 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                     last_partial_text = ""
                     await websocket.send_json({"type": "stt_status", "status": "transcribing"})
                     
-                    transcribed_text = await stt_service.transcribe_pcm_async(completed_audio)
+                    stt_res = await stt_service.transcribe_pcm_with_info_async(completed_audio)
+                    transcribed_text = stt_res.get("text", "")
+                    detected_lang = stt_res.get("language", "pt")
                     
                     if transcribed_text:
                         await websocket.send_json({
                             "type": "stt_result",
                             "text": transcribed_text,
-                            "user": user_email
+                            "user": user_email,
+                            "language": detected_lang
                         })
 
-                        # Geração de resposta LLM em tempo real (Qwen 2.5)
-                        print(f"🧠 [LLM GENERATING] Enviando ao {settings.OLLAMA_MODEL}...", flush=True)
+                        # Geração de resposta LLM no mesmo idioma que o usuário falou
+                        lang_prompt = (
+                            f"{settings.JARVIS_SYSTEM_PROMPT}\n"
+                            f"Instrução Estrita de Idioma: O usuário falou no idioma '{detected_lang.upper()}'. "
+                            f"Você DEVE responder obrigatoriamente no idioma '{detected_lang.upper()}'."
+                        )
+
+                        print(f"🧠 [LLM GENERATING] Processando no Qwen 2.5 (Idioma detectado pelo Whisper: {detected_lang.upper()})...", flush=True)
                         await websocket.send_json({"type": "llm_status", "status": "generating"})
                         
                         full_llm_response = ""
-                        async for chunk in llm_service.generate_stream(transcribed_text):
+                        async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
                             full_llm_response += chunk
                             await websocket.send_json({
                                 "type": "llm_chunk",

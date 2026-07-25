@@ -26,12 +26,12 @@ class Settings:
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
     JARVIS_SYSTEM_PROMPT: str = os.getenv(
         "JARVIS_SYSTEM_PROMPT",
-        "Você é o Jarvis 3.0, um assistente pessoal conciso e inteligente. Responda em português de forma direta e curta para ser lido em voz alta pelo sistema TTS."
+        "Você é o Jarvis 3.0, um assistente pessoal conciso, fluente e multilíngue. RESPONDA SEMPRE NO MESMO IDIOMA EM QUE O USUÁRIO FALOU OU ESCREVEU (Português, Inglês, Espanhol, Francês, etc.). Mantenha as respostas diretas e curtas para serem lidas em voz alta pelo sistema TTS."
     )
     
-    # Seleção e Configuração de Motor TTS (Edge-TTS, Piper, etc)
+    # Seleção e Configuração de Motor TTS (Edge-TTS Multilíngue Remy)
     TTS_ENGINE: str = os.getenv("TTS_ENGINE", "edge-tts")
-    TTS_VOICE: str = os.getenv("TTS_VOICE", "pt-BR-AntonioNeural")
+    TTS_VOICE: str = os.getenv("TTS_VOICE", "fr-FR-RemyMultilingualNeural")
     
     # VAD backend config
     VAD_SILENCE_THRESHOLD_RMS: float = float(os.getenv("VAD_SILENCE_THRESHOLD_RMS", "0.015"))

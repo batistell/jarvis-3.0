@@ -18,6 +18,11 @@ class BaseSTTEngine(ABC):
         pass
 
     @abstractmethod
+    def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
+        """Transcreve o áudio PCM final retornando o texto e o idioma detectado pelo Whisper."""
+        pass
+
+    @abstractmethod
     def transcribe_partial_pcm(self, pcm_bytes: bytes) -> str:
         """Transcreve trechos parciais em tempo real (live streaming)."""
         pass
@@ -25,6 +30,10 @@ class BaseSTTEngine(ABC):
     async def transcribe_pcm_async(self, pcm_bytes: bytes) -> str:
         """Invoca a transcrição final de forma assíncrona em uma thread separada."""
         return await asyncio.to_thread(self.transcribe_pcm, pcm_bytes)
+
+    async def transcribe_pcm_with_info_async(self, pcm_bytes: bytes) -> dict:
+        """Invoca a transcrição com info de idioma em thread assíncrona."""
+        return await asyncio.to_thread(self.transcribe_pcm_with_info, pcm_bytes)
 
     async def transcribe_partial_async(self, pcm_bytes: bytes) -> str:
         """Invoca a transcrição parcial em tempo real de forma assíncrona."""

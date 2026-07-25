@@ -73,15 +73,17 @@ class FasterWhisperEngine(BaseSTTEngine):
 
     def transcribe_pcm(self, pcm_bytes: bytes) -> str:
         """Transcreve o áudio final acumulado com medição de tempo e filtro VAD."""
-        if not pcm_bytes:
-            return ""
+        """Transcreve os bytes de áudio PCM finais e retorna o texto transcrito."""
+        res = self.transcribe_pcm_with_info(pcm_bytes)
+        return res.get("text", "")
 
-        if self.model is None:
+    def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
+        """Transcreve o áudio PCM final com detecção automática de idioma do Whisper Large-v3."""
+        if not pcm_bytes or self.model is None:
             self.load_model()
 
         if self.model is None:
-            print("❌ [STT ERROR] Modelo Whisper não está disponível.", flush=True)
-            return ""
+            return {"text": "", "language": "pt", "probability": 0.0}
 
         start_time = time.time()
         pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -97,7 +99,7 @@ class FasterWhisperEngine(BaseSTTEngine):
                 hallucination_silence_threshold=0.5,
                 no_speech_threshold=0.6,
                 initial_prompt=settings.WHISPER_INITIAL_PROMPT,
-                language="pt"
+                language=None  # Detecção automática multilíngue do Large-v3!
             )
 
             transcribed_fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
@@ -107,17 +109,23 @@ class FasterWhisperEngine(BaseSTTEngine):
             full_text = hallucination_filter.clean_text(raw_text)
             
             elapsed_ms = (time.time() - start_time) * 1000.0
+            detected_lang = getattr(info, "language", "pt")
+            prob = getattr(info, "language_probability", 1.0)
 
             if full_text:
-                print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio]: \"{full_text}\"\n", flush=True)
+                print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio | Idioma: {detected_lang.upper()} ({prob*100:.0f}%)]: \"{full_text}\"\n", flush=True)
             else:
                 print(f"ℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada / alucinação filtrada)\n", flush=True)
 
-            return full_text
+            return {
+                "text": full_text,
+                "language": detected_lang,
+                "probability": prob
+            }
 
         except Exception as e:
             print(f"❌ [STT ERROR] Erro durante a transcrição: {e}", flush=True)
-            return ""
+            return {"text": "", "language": "pt", "probability": 0.0}
 
     def transcribe_partial_pcm(self, pcm_bytes: bytes) -> str:
         """Transcrição parcial ultrarrápida (live streaming) para áudio em tempo real."""
@@ -134,7 +142,7 @@ class FasterWhisperEngine(BaseSTTEngine):
                 vad_filter=False,
                 condition_on_previous_text=False,
                 initial_prompt=settings.WHISPER_INITIAL_PROMPT,
-                language="pt"
+                language=None
             )
             fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
             raw = " ".join(fragments).strip()
