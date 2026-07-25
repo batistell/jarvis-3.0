@@ -267,10 +267,23 @@ class HAService:
             service = "turn_off"
             target_expected_state = "off"
             action_desc = "desligar"
+        elif action_norm in ("toggle", "alternar", "trocar", "chavear"):
+            # Para toggle, consulta o estado atual no HA e inverte o estado
+            current_st_data = await self.get_entity_state(entity_id)
+            current_st = current_st_data.get("state") if current_st_data else "off"
+            if current_st == "on":
+                service = "turn_off"
+                target_expected_state = "off"
+                action_desc = "desligar"
+            else:
+                service = "turn_on"
+                target_expected_state = "on"
+                action_desc = "ligar"
         else:
             service = action_norm
             target_expected_state = expected_state or "on"
             action_desc = action_norm
+
 
         if expected_state:
             target_expected_state = expected_state
@@ -438,15 +451,25 @@ class HAService:
                 "message": msg
             }
 
+        # Padrões de alternância (TOGGLE / DOUBLE CLAP / PALMAS)
+        toggle_match = re.search(
+            r'\b(alterna|alternar|troca|trocar|chaveia|chavear|toggle|double\s*clap|palma|palmas)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
+            text_clean
+        )
+
         action = None
         raw_target = None
 
-        if off_match:
+        if toggle_match:
+            action = "toggle"
+            raw_target = (toggle_match.group(2) or "").strip()
+        elif off_match:
             action = "turn_off"
             raw_target = (off_match.group(2) or "").strip()
         elif on_match:
             action = "turn_on"
             raw_target = (on_match.group(2) or "").strip()
+
 
 
         if not action:

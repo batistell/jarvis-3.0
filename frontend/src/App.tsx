@@ -22,7 +22,25 @@ export const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [partialTranscript, setPartialTranscript] = useState<string>('');
 
-  // Hook de gravação de voz PCM 16kHz com seleção de microfone
+  // Handler para evento de Palma Dupla (Double Clap) -> Alterna a luz principal do escritório
+  const handleDoubleClap = React.useCallback(() => {
+    console.log('👏 👏 [APP DOUBLE CLAP] Disparando alternância da luz do escritório...');
+    
+    const clapMsg: Message = {
+      id: `clap-${Date.now()}`,
+      role: 'user',
+      content: '👏 👏 [Palma Dupla] Alternar luz do escritório',
+      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    };
+
+
+    setMessages((prev) => [...prev, clapMsg]);
+
+    // Envia o comando de alternância para o backend acionar a luz do escritório
+    jarvisSocket.sendText('Alternar a luz do escritório.');
+  }, []);
+
+  // Hook de gravação de voz PCM 16kHz com seleção de microfone e detector de palma dupla
   const {
     isRecording,
     volumeLevel,
@@ -32,7 +50,8 @@ export const App: React.FC = () => {
     refreshDevices,
     startRecording,
     stopRecording
-  } = useVoiceRecorder();
+  } = useVoiceRecorder({ onDoubleClap: handleDoubleClap });
+
 
   // Monitora estado de autenticação do Firebase
   useEffect(() => {
