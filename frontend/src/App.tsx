@@ -18,13 +18,10 @@ export const App: React.FC = () => {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [partialTranscript, setPartialTranscript] = useState<string>('');
 
   // Hook de gravação de voz PCM 16kHz
-  const { isRecording, volumeLevel, startRecording, stopRecording } = useVoiceRecorder({
-    onSpeechEnd: () => {
-      setVoiceState('transcribing');
-    }
-  });
+  const { isRecording, volumeLevel, startRecording, stopRecording } = useVoiceRecorder();
 
   // Monitora estado de autenticação do Firebase
   useEffect(() => {
@@ -51,18 +48,23 @@ export const App: React.FC = () => {
 
   // Inicializa o WebSocket
   useEffect(() => {
-    jarvisSocket.onStateChange((status) => {
+    const unsubState = jarvisSocket.onStateChange((status) => {
       setConnectionStatus(status);
     });
 
-    jarvisSocket.onTextMessage((data) => {
-      if (data.type === 'stt_status') {
+    const unsubText = jarvisSocket.onTextMessage((data) => {
+      if (data.type === 'stt_partial') {
+        setPartialTranscript(data.text);
+        setVoiceState('listening');
+      } else if (data.type === 'stt_status') {
         if (data.status === 'transcribing') {
           setVoiceState('transcribing');
         } else if (data.status === 'idle') {
           setVoiceState('idle');
+          setPartialTranscript('');
         }
       } else if (data.type === 'stt_result') {
+        setPartialTranscript('');
         setVoiceState('thinking');
         const userMsg: Message = {
           id: Date.now().toString(),
@@ -70,7 +72,13 @@ export const App: React.FC = () => {
           content: data.text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
-        setMessages((prev) => [...prev, userMsg]);
+        setMessages((prev) => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.role === 'user' && lastMsg.content === data.text) {
+            return prev;
+          }
+          return [...prev, userMsg];
+        });
       } else if (data.type === 'text_token') {
         setVoiceState('speaking');
         setMessages((prev) => {
@@ -87,6 +95,8 @@ export const App: React.FC = () => {
     jarvisSocket.connect('dev-jwt-token');
 
     return () => {
+      unsubText();
+      unsubState();
       jarvisSocket.disconnect();
     };
   }, []);
@@ -95,6 +105,7 @@ export const App: React.FC = () => {
     if (isRecording) {
       stopRecording();
       setVoiceState('idle');
+      setPartialTranscript('');
     } else {
       startRecording();
       setVoiceState('listening');
@@ -162,6 +173,7 @@ export const App: React.FC = () => {
           volumeLevel={volumeLevel}
           isRecording={isRecording}
           onToggleRecord={handleToggleRecord}
+          partialTranscript={partialTranscript}
         />
 
         {/* Chat Timeline */}

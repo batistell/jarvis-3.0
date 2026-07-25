@@ -7,25 +7,27 @@ interface VoiceOrbProps {
   volumeLevel: number; // 0 a 1
   isRecording: boolean;
   onToggleRecord: () => void;
+  partialTranscript?: string;
 }
 
 export const VoiceOrb: React.FC<VoiceOrbProps> = ({
   voiceState,
   volumeLevel,
   isRecording,
-  onToggleRecord
+  onToggleRecord,
+  partialTranscript
 }) => {
   // Ajuste do diâmetro dinâmico da orbe com base no volume
   const orbScale = 1 + volumeLevel * 0.45;
   const glowOpacity = Math.min(1, 0.4 + volumeLevel * 0.6);
 
   return (
-    <div className="hud-card p-6 mb-6 flex flex-col items-center justify-center min-h-[220px] relative">
+    <div className="hud-card p-6 mb-6 flex flex-col items-center justify-center min-h-[240px] relative">
       <div className="corner-accent-bl"></div>
       <div className="corner-accent-br"></div>
 
       {/* Orbe Holográfica Central */}
-      <div className="relative flex items-center justify-center w-40 h-40 mb-4 cursor-pointer" onClick={onToggleRecord}>
+      <div className="relative flex items-center justify-center w-40 h-40 mb-3 cursor-pointer" onClick={onToggleRecord}>
         {/* Outer Pulsing Rings */}
         <div
           className="absolute inset-0 rounded-full border border-cyan-500/30 transition-all duration-150"
@@ -69,6 +71,16 @@ export const VoiceOrb: React.FC<VoiceOrbProps> = ({
           )}
         </div>
       </div>
+
+      {/* Dynamic Realtime Stream Transcript Display */}
+      {partialTranscript ? (
+        <div className="mb-4 max-w-xl px-5 py-2.5 bg-emerald-950/70 border border-green-500/50 rounded-full flex items-center gap-3 shadow-[0_0_15px_rgba(57,255,20,0.2)] animate-pulse">
+          <span className="w-2.5 h-2.5 rounded-full bg-green-400 animate-ping"></span>
+          <p className="text-sm font-mono text-green-300 italic tracking-wide">
+            "{partialTranscript}"
+          </p>
+        </div>
+      ) : null}
 
       {/* State Caption & Mic Toggle Button */}
       <div className="flex items-center gap-4">

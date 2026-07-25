@@ -6,18 +6,41 @@ export const useVoiceRecorder = () => {
   const [volumeLevel, setVolumeLevel] = useState<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('🎙️ [STT DEBUG] Solicitando permissão de microfone...');
+      
+      // Garantir conexão WebSocket ativa
+      jarvisSocket.connect('dev-jwt-token');
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
       streamRef.current = stream;
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioCtx({ sampleRate: 16000 });
+      
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+        console.log('🎙️ [STT DEBUG] AudioContext resumido de suspended para running.');
+      }
+
       audioContextRef.current = audioContext;
 
       const source = audioContext.createMediaStreamSource(stream);
+      // bufferSize=4096 (~256ms por frame PCM a 16kHz)
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor; // Evita garbage collection do node no browser
+
+      let frameCount = 0;
 
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
@@ -30,27 +53,41 @@ export const useVoiceRecorder = () => {
           sumSquares += s * s;
         }
 
-        // Transmite o buffer PCM bruto em streaming contínuo para o backend (FastAPI)
-        // O VAD no servidor cuidará de detectar o início e o fim da fala (pausa)
+        frameCount++;
+        if (frameCount % 10 === 0) {
+          console.log(`🎙️ [STT STREAMING] Enviando frame #${frameCount} (${pcmData.byteLength} bytes PCM) ao backend...`);
+        }
+
+        // Transmite o buffer PCM bruto via WebSocket
         jarvisSocket.sendBinary(pcmData.buffer);
 
-        // Atualiza o medidor visual de volume no Orbe
+        // Atualiza o medidor visual de volume
         const rms = Math.sqrt(sumSquares / inputData.length);
         setVolumeLevel(Math.min(1, rms * 5));
       };
 
       source.connect(processor);
-      processor.connect(audioContext.destination);
+
+      // Conecta o processor a um canal mudo para manter o audioContext ativo sem microfonia
+      const silenceGain = audioContext.createGain();
+      silenceGain.gain.value = 0;
+      processor.connect(silenceGain);
+      silenceGain.connect(audioContext.destination);
 
       setIsRecording(true);
+      console.log('✅ [STT DEBUG] Captação de microfone ativada e transmitindo em tempo real!');
     } catch (err) {
-      console.error('Erro ao acessar microfone:', err);
+      console.error('❌ [STT ERROR] Erro ao acessar microfone:', err);
     }
   }, []);
 
   const stopRecording = useCallback(() => {
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
     if (audioContextRef.current) {
@@ -59,6 +96,7 @@ export const useVoiceRecorder = () => {
     }
     setIsRecording(false);
     setVolumeLevel(0);
+    console.log('🛑 [STT DEBUG] Captação de microfone encerrada.');
   }, []);
 
   return {

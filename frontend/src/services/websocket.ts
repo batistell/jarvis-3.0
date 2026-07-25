@@ -63,6 +63,9 @@ export class JarvisWebSocketClient {
   public sendBinary(data: ArrayBuffer) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(data);
+    } else if (!this.socket || this.socket.readyState === WebSocket.CLOSED || this.socket.readyState === WebSocket.CLOSING) {
+      console.warn('⚠️ [WEBSOCKET] Tentativa de envio de áudio com WebSocket desconectado. Reconectando...');
+      this.connect();
     }
   }
 
@@ -79,12 +82,22 @@ export class JarvisWebSocketClient {
     }
   }
 
-  public onTextMessage(cb: WebSocketMessageCallback) {
-    this.onTextMessageCallbacks.push(cb);
+  public onTextMessage(cb: WebSocketMessageCallback): () => void {
+    if (!this.onTextMessageCallbacks.includes(cb)) {
+      this.onTextMessageCallbacks.push(cb);
+    }
+    return () => {
+      this.onTextMessageCallbacks = this.onTextMessageCallbacks.filter(c => c !== cb);
+    };
   }
 
-  public onStateChange(cb: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => void) {
-    this.onStateChangeCallbacks.push(cb);
+  public onStateChange(cb: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => void): () => void {
+    if (!this.onStateChangeCallbacks.includes(cb)) {
+      this.onStateChangeCallbacks.push(cb);
+    }
+    return () => {
+      this.onStateChangeCallbacks = this.onStateChangeCallbacks.filter(c => c !== cb);
+    };
   }
 
   private notifyState(status: 'disconnected' | 'connecting' | 'connected' | 'error') {
