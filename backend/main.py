@@ -150,10 +150,26 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                     else:
                         await websocket.send_json({"type": "stt_status", "status": "idle"})
                         
-            # 2. Comandos de texto manuais
+            # 2. Comandos de texto manuais do chat
             elif "text" in message and message["text"]:
                 text_cmd = message["text"]
                 print(f"\n💬 [TEXT COMMAND] Mensagem de texto recebida: \"{text_cmd}\"")
+                print(f"🧠 [LLM GENERATING] Processando mensagem...", flush=True)
+                await websocket.send_json({"type": "llm_status", "status": "generating"})
+                
+                full_llm_response = ""
+                async for chunk in llm_service.generate_stream(text_cmd):
+                    full_llm_response += chunk
+                    await websocket.send_json({
+                        "type": "llm_chunk",
+                        "text": chunk
+                    })
+                
+                print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                await websocket.send_json({
+                    "type": "llm_result",
+                    "text": full_llm_response.strip()
+                })
 
     except WebSocketDisconnect:
         print(f"\n🔌 [WEBSOCKET DISCONNECTED] Cliente {user_email} desconectou do canal de voz.\n")

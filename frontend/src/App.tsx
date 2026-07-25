@@ -79,16 +79,33 @@ export const App: React.FC = () => {
           }
           return [...prev, userMsg];
         });
-      } else if (data.type === 'text_token') {
+      } else if (data.type === 'llm_chunk' || data.type === 'text_token') {
+        const tokenText = data.text || data.content || '';
         setVoiceState('speaking');
+        setIsGenerating(true);
         setMessages((prev) => {
           const updated = [...prev];
           const lastMsg = updated[updated.length - 1];
           if (lastMsg && lastMsg.role === 'assistant') {
-            lastMsg.content += data.content;
+            return [
+              ...updated.slice(0, updated.length - 1),
+              { ...lastMsg, content: lastMsg.content + tokenText }
+            ];
+          } else {
+            return [
+              ...updated,
+              {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: tokenText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              }
+            ];
           }
-          return [...updated];
         });
+      } else if (data.type === 'llm_result') {
+        setVoiceState('idle');
+        setIsGenerating(false);
       }
     });
 
@@ -120,14 +137,6 @@ export const App: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
     setMessages((prev) => [...prev, userMsg]);
-
-    const jarvisMsg: Message = {
-      id: (Date.now() + 1).toString(),
-      role: 'assistant',
-      content: '',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    setMessages((prev) => [...prev, jarvisMsg]);
 
     setIsGenerating(true);
     setVoiceState('thinking');
