@@ -2,19 +2,24 @@ import sys
 import io
 import re
 import time
+import wave
+import base64
+import numpy as np
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
+from pydantic import BaseModel
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
-import base64
 from backend.services.auth_service import validate_firebase_token
 from backend.services.vad_service import BackendVADDetector
 from backend.services.stt_service import stt_service
 from backend.services.llm_service import llm_service
 from backend.services.tts_service import tts_service
 from backend.services.health_service import health_service
+from backend.services.ha_service import ha_service
 
 # Regex para extrair sentenças completas do stream de tokens do LLM
+
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?;:\n])\s+')
 
 # Garantir codificação UTF-8 no stdout/stderr no Windows
@@ -23,13 +28,15 @@ if hasattr(sys.stdout, 'buffer') and getattr(sys.stdout, 'encoding', '').lower()
 if hasattr(sys.stderr, 'buffer') and getattr(sys.stderr, 'encoding', '').lower() != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+from backend.services.wyoming_service import wyoming_service
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Pré-carrega o modelo Whisper Large e verifica a disponibilidade do modelo LLM.
     """
     print("\n" + "=" * 65)
-    print("🚀 INICIALIZANDO BACKEND DO JARVIS 3.0 (SERVIDORES STT, LLM & VAD)")
+    print("🚀 INICIALIZANDO BACKEND DO JARVIS 3.0 (SERVIDORES STT, LLM, VAD & WYOMING)")
     print("=" * 65, flush=True)
     
     # Executa pré-carregamento do modelo Whisper STT
@@ -38,7 +45,14 @@ async def lifespan(app: FastAPI):
     # Verifica/baixa modelo LLM no Ollama
     await llm_service.ensure_model_loaded()
     
-    print("\n🎧 [SERVER READY] Backend aguardando conexões WebSocket e áudio em tempo real...\n", flush=True)
+    # Inicia servidores TCP do Wyoming Protocol (STT 10300, TTS 10200)
+    await wyoming_service.start(stt_port=10300, tts_port=10200)
+
+    # Pré-carrega entidades e dispositivos do Home Assistant em memória
+    await ha_service.load_entities_cache(force=True)
+
+    print("\n🎧 [SERVER READY] Backend e Servidores Wyoming (10300/10200) Prontos!\n", flush=True)
+
     yield
     print("🛑 Encerrando backend Jarvis 3.0.", flush=True)
 
@@ -81,6 +95,179 @@ async def trigger_garbage_collection():
     Força coleta de lixo e limpeza de memória.
     """
     return health_service.release_memory()
+
+
+class HAChatRequest(BaseModel):
+    message: str | None = None
+    text: str | None = None
+    conversation_id: str | None = None
+
+
+class HATTSRequest(BaseModel):
+    text: str | None = None
+    message: str | None = None
+    language: str | None = None
+
+
+def _convert_audio_to_pcm16_16khz(raw_bytes: bytes) -> bytes:
+    """
+    Converte bytes de áudio (WAV RIFF ou PCM) recebidos do Home Assistant STT
+    em PCM 16-bit 16kHz mono esperado pelo FasterWhisperEngine.
+    """
+    if not raw_bytes:
+        return b""
+
+    if raw_bytes.startswith(b"RIFF") and len(raw_bytes) > 44:
+        try:
+            with wave.open(io.BytesIO(raw_bytes), "rb") as wf:
+                nchannels = wf.getnchannels()
+                sampwidth = wf.getsampwidth()
+                framerate = wf.getframerate()
+                frames = wf.readframes(wf.getnframes())
+
+                if sampwidth == 2:
+                    audio_data = np.frombuffer(frames, dtype=np.int16)
+                elif sampwidth == 4:
+                    audio_data = (np.frombuffer(frames, dtype=np.int32) >> 16).astype(np.int16)
+                elif sampwidth == 1:
+                    audio_data = ((np.frombuffer(frames, dtype=np.uint8).astype(np.int32) - 128) << 8).astype(np.int16)
+                else:
+                    audio_data = np.frombuffer(frames, dtype=np.int16)
+
+                if nchannels > 1:
+                    audio_data = audio_data[::nchannels]
+
+                if framerate != 16000 and len(audio_data) > 0:
+                    new_length = int(len(audio_data) * 16000 / framerate)
+                    audio_data = np.interp(
+                        np.linspace(0, len(audio_data), new_length, endpoint=False),
+                        np.arange(len(audio_data)),
+                        audio_data
+                    ).astype(np.int16)
+
+                return audio_data.tobytes()
+        except Exception as e:
+            print(f"⚠️ [STT REST] Erro ao decodificar cabeçalho WAV: {e}. Usando bytes brutos como fallback.", flush=True)
+
+    return raw_bytes
+
+
+# --- ENDPOINTS REST PARA HOME ASSISTANT ASSIST PIPELINE ---
+
+@app.get("/api/v1/ha/test")
+async def ha_test_endpoint():
+    """
+    Endpoint de teste e diagnóstico da conexão do Jarvis com o Home Assistant.
+    """
+    if not ha_service.is_configured:
+        return {
+            "configured": False,
+            "message": "Token do Home Assistant (HA_TOKEN) não configurado no arquivo .env."
+        }
+    entities = await ha_service.list_entities(domain="light")
+    return {
+        "configured": True,
+        "ha_url": settings.HA_URL,
+        "light_entities_count": len(entities),
+        "lights": [
+            {
+                "entity_id": e.get("entity_id"),
+                "state": e.get("state"),
+                "friendly_name": e.get("attributes", {}).get("friendly_name")
+            }
+            for e in entities[:10]
+        ]
+    }
+
+
+@app.post("/api/v1/chat")
+async def ha_chat_endpoint(req: HAChatRequest):
+    """
+    Endpoint de Conversação/LLM para o Home Assistant Conversation Agent.
+    Recebe a mensagem de texto, executa a verificação de sensores se for comando de luz/dispositivo,
+    e retorna a resposta verificada pelo Jarvis.
+    """
+    prompt = (req.message or req.text or "").strip()
+    conversation_id = req.conversation_id or "default"
+
+    if not prompt:
+        return {
+            "response": "Nenhuma mensagem recebida.",
+            "text": "Nenhuma mensagem recebida.",
+            "conversation_id": conversation_id
+        }
+
+    print(f"🤖 [HA ASSIST CHAT] Mensagem recebida: \"{prompt}\" (conversation_id: {conversation_id})", flush=True)
+    try:
+        # 1. Tenta interpretar como comando de automação com feedback de sensor do HA
+        ha_res = await ha_service.parse_and_execute_ha_command(prompt)
+        if ha_res:
+            reply_clean = ha_res["message"]
+        else:
+            reply_text = await llm_service.generate(prompt)
+            reply_clean = reply_text.strip()
+    except Exception as e:
+        print(f"❌ [HA ASSIST CHAT ERROR] Erro no processamento: {e}", flush=True)
+        reply_clean = "Desculpe, ocorreu um erro ao processar a resposta no Jarvis."
+
+    print(f"💬 [HA ASSIST CHAT RESPONSE]: \"{reply_clean}\"", flush=True)
+    return {
+        "response": reply_clean,
+        "text": reply_clean,
+        "conversation_id": conversation_id
+    }
+
+
+
+@app.post("/api/v1/stt")
+async def ha_stt_endpoint(request: Request):
+    """
+    Endpoint de Speech-to-Text para a plataforma 'stt: rest' do Home Assistant.
+    Recebe o áudio enviado pelo aplicativo do celular / HA e retorna a transcrição.
+    """
+    audio_bytes = await request.body()
+    if not audio_bytes:
+        return {"text": ""}
+
+    print(f"🎙️  [HA ASSIST STT] Áudio recebido: {len(audio_bytes)} bytes", flush=True)
+    pcm_bytes = _convert_audio_to_pcm16_16khz(audio_bytes)
+    
+    stt_res = await stt_service.transcribe_pcm_with_info_async(pcm_bytes)
+    transcribed_text = stt_res.get("text", "").strip()
+
+    print(f"✨ [HA ASSIST STT RESULT]: \"{transcribed_text}\"", flush=True)
+    return {"text": transcribed_text}
+
+
+@app.post("/api/v1/tts")
+async def ha_tts_endpoint(request: Request, req: HATTSRequest | None = None):
+    """
+    Endpoint de Text-to-Speech para a plataforma 'tts: rest' do Home Assistant.
+    Recebe a frase em texto e retorna o arquivo de áudio MP3 binário para o celular reproduzir.
+    """
+    text = ""
+    if req and (req.text or req.message):
+        text = req.text or req.message or ""
+    else:
+        try:
+            body_json = await request.json()
+            text = body_json.get("text") or body_json.get("message") or ""
+        except Exception:
+            body_bytes = await request.body()
+            text = body_bytes.decode("utf-8", errors="ignore").strip()
+
+    text = text.strip()
+    if not text:
+        return Response(content=b"", media_type="audio/mpeg")
+
+    print(f"🔊 [HA ASSIST TTS] Sintetizando voz para: \"{text}\"", flush=True)
+    try:
+        audio_bytes = await tts_service.synthesize_async(text)
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+    except Exception as e:
+        print(f"❌ [HA ASSIST TTS ERROR] Falha ao sintetizar voz: {e}", flush=True)
+        return Response(content=b"", media_type="audio/mpeg", status_code=500)
+
 
 active_voice_socket: WebSocket | None = None
 
@@ -162,57 +349,70 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             f"Você DEVE responder obrigatoriamente no idioma '{detected_lang.upper()}'."
                         )
 
-                        print(f"🧠 [LLM GENERATING] Processando no Qwen 2.5 (Idioma detectado pelo Whisper: {detected_lang.upper()})...", flush=True)
+                        print(f"🧠 [PROCESSING RESPONSE] Analisando comando e gerando resposta (Idioma: {detected_lang.upper()})...", flush=True)
                         await websocket.send_json({"type": "llm_status", "status": "generating"})
 
-                        # --- Sentence-Streaming TTS ---
-                        # Sintetiza e envia cada frase ao cliente mal o LLM a termina,
-                        # reduzindo a latência percebida do TTS de ~1.5s para ~300ms.
-                        llm_start_t = time.time()
-                        full_llm_response = ""
-                        tts_buffer = ""        # Acumula tokens até ter uma frase completa
-                        first_audio_sent = False
-
-                        async def _flush_tts(sentence: str) -> None:
-                            """Sintetiza uma frase e envia o áudio pelo WebSocket imediatamente."""
-                            nonlocal first_audio_sent
-                            sentence = sentence.strip()
-                            if not sentence:
-                                return
-                            tts_t = time.time()
+                        # Verifica se é um comando de automação residencial com validação de sensor do HA
+                        ha_res = await ha_service.parse_and_execute_ha_command(transcribed_text)
+                        
+                        if ha_res:
+                            full_llm_response = ha_res["message"]
+                            await websocket.send_json({"type": "llm_chunk", "text": full_llm_response})
                             try:
-                                audio_bytes = await tts_service.synthesize_async(sentence)
+                                audio_bytes = await tts_service.synthesize_async(full_llm_response)
                                 if audio_bytes:
                                     audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
                                     await websocket.send_json({"type": "tts_audio", "audio": audio_b64})
-                                    elapsed_tts = (time.time() - tts_t) * 1000.0
-                                    health_service.record_tts_latency(elapsed_tts)
-                                    if not first_audio_sent:
-                                        first_audio_sent = True
-                                        print(f"🔊 [TTS FIRST CHUNK] {elapsed_tts:.0f}ms → \"{sentence[:40]}...\"", flush=True)
                             except Exception as tts_err:
                                 print(f"⚠️ [TTS ERROR] {tts_err}", flush=True)
+                        else:
+                            # --- Sentence-Streaming TTS para respostas convencionais do LLM ---
+                            llm_start_t = time.time()
+                            full_llm_response = ""
+                            tts_buffer = ""        # Acumula tokens até ter uma frase completa
+                            first_audio_sent = False
 
-                        async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
-                            full_llm_response += chunk
-                            tts_buffer += chunk
-                            await websocket.send_json({"type": "llm_chunk", "text": chunk})
+                            async def _flush_tts(sentence: str) -> None:
+                                """Sintetiza uma frase e envia o áudio pelo WebSocket imediatamente."""
+                                nonlocal first_audio_sent
+                                sentence = sentence.strip()
+                                if not sentence:
+                                    return
+                                tts_t = time.time()
+                                try:
+                                    audio_bytes = await tts_service.synthesize_async(sentence)
+                                    if audio_bytes:
+                                        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                                        await websocket.send_json({"type": "tts_audio", "audio": audio_b64})
+                                        elapsed_tts = (time.time() - tts_t) * 1000.0
+                                        health_service.record_tts_latency(elapsed_tts)
+                                        if not first_audio_sent:
+                                            first_audio_sent = True
+                                            print(f"🔊 [TTS FIRST CHUNK] {elapsed_tts:.0f}ms → \"{sentence[:40]}...\"", flush=True)
+                                except Exception as tts_err:
+                                    print(f"⚠️ [TTS ERROR] {tts_err}", flush=True)
 
-                            # Verifica se o buffer já contém ao menos uma frase terminada
-                            parts = _SENTENCE_SPLIT_RE.split(tts_buffer)
-                            if len(parts) > 1:
-                                # As partes exceto a última estão completas → sintetiza cada uma
-                                for sentence in parts[:-1]:
-                                    await _flush_tts(sentence)
-                                tts_buffer = parts[-1]  # Guarda o fragmento incompleto
+                            async for chunk in llm_service.generate_stream(transcribed_text, system_prompt=lang_prompt):
+                                full_llm_response += chunk
+                                tts_buffer += chunk
+                                await websocket.send_json({"type": "llm_chunk", "text": chunk})
 
-                        # Sintetiza o fragmento final (última frase sem pontuação de fim)
-                        if tts_buffer.strip():
-                            await _flush_tts(tts_buffer)
+                                # Verifica se o buffer já contém ao menos uma frase terminada
+                                parts = _SENTENCE_SPLIT_RE.split(tts_buffer)
+                                if len(parts) > 1:
+                                    # As partes exceto a última estão completas → sintetiza cada uma
+                                    for sentence in parts[:-1]:
+                                        await _flush_tts(sentence)
+                                    tts_buffer = parts[-1]  # Guarda o fragmento incompleto
 
-                        llm_elapsed = (time.time() - llm_start_t) * 1000.0
-                        health_service.record_llm_latency(llm_elapsed)
-                        print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                            # Sintetiza o fragmento final (última frase sem pontuação de fim)
+                            if tts_buffer.strip():
+                                await _flush_tts(tts_buffer)
+
+                            llm_elapsed = (time.time() - llm_start_t) * 1000.0
+                            health_service.record_llm_latency(llm_elapsed)
+
+                        print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
 
                         await websocket.send_json({
                             "type": "llm_result",
@@ -226,18 +426,23 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
             elif "text" in message and message["text"]:
                 text_cmd = message["text"]
                 print(f"\n💬 [TEXT COMMAND] Mensagem de texto recebida: \"{text_cmd}\"")
-                print(f"🧠 [LLM GENERATING] Processando mensagem...", flush=True)
+                print(f"🧠 [PROCESSING RESPONSE] Processando mensagem...", flush=True)
                 await websocket.send_json({"type": "llm_status", "status": "generating"})
                 
-                full_llm_response = ""
-                async for chunk in llm_service.generate_stream(text_cmd):
-                    full_llm_response += chunk
-                    await websocket.send_json({
-                        "type": "llm_chunk",
-                        "text": chunk
-                    })
+                ha_res = await ha_service.parse_and_execute_ha_command(text_cmd)
+                if ha_res:
+                    full_llm_response = ha_res["message"]
+                    await websocket.send_json({"type": "llm_chunk", "text": full_llm_response})
+                else:
+                    full_llm_response = ""
+                    async for chunk in llm_service.generate_stream(text_cmd):
+                        full_llm_response += chunk
+                        await websocket.send_json({
+                            "type": "llm_chunk",
+                            "text": chunk
+                        })
                 
-                print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
                 
                 # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
                 if full_llm_response.strip():
@@ -256,6 +461,7 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                     "type": "llm_result",
                     "text": full_llm_response.strip()
                 })
+
 
     except WebSocketDisconnect:
         print(f"\n🔌 [WEBSOCKET DISCONNECTED] Cliente {user_email} desconectou do canal de voz.\n")

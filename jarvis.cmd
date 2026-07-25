@@ -8,20 +8,12 @@ echo.
 set PYTHONIOENCODING=utf-8
 set PATH=C:\Program Files\nodejs;%PATH%
 
-echo [0/3] Limpando processos zumbis anteriores da VRAM da GPU...
-powershell -Command "try { Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } } catch {}"
+echo ⚡ Iniciando Frontend Vite e abrindo Navegador (http://localhost:5173)...
+powershell -Command "Start-Process 'C:\Program Files\nodejs\npm.cmd' -ArgumentList 'run', 'dev' -WorkingDirectory '%~dp0frontend' -WindowStyle Hidden; Start-Sleep -Milliseconds 600; Start-Process 'http://localhost:5173'"
 
-echo [1/3] Iniciando o servidor Vite Frontend (Silencioso em segundo plano)...
-powershell -Command "Start-Process cmd.exe -ArgumentList '/c cd /d ""%~dp0frontend"" && npm run dev' -WindowStyle Hidden"
 
-echo [2/3] Carregando interface web no navegador (Reutilizando janela existente)...
-if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
-    start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --app=http://localhost:5173
-) else (
-    start "" "http://localhost:5173"
-)
-
-echo [3/3] Executando o backend FastAPI em primeiro plano (Console de Logs em Tempo Real)...
+echo 🚀 Executando Backend FastAPI em primeiro plano...
 echo.
 cd /d "%~dp0"
 "%~dp0venv\Scripts\python.exe" -m uvicorn backend.main:app --port 8000
+

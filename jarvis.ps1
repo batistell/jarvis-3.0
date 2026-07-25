@@ -6,30 +6,17 @@ Write-Host "  INICIALIZANDO JARVIS 3.0 (BACKEND & FRONTEND)    " -ForegroundColo
 Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 0. Encerra instâncias zumbis anteriores do backend/frontend para liberar 100% da VRAM da GPU
-Write-Host "[0/3] Limpando processos zumbis anteriores da VRAM da GPU..." -ForegroundColor Yellow
-try {
-    $connections = Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue
-    foreach ($conn in $connections) {
-        if ($conn.OwningProcess -and $conn.OwningProcess -ne $PID) {
-            Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
-        }
-    }
-} catch {}
+# 1. Inicia o Frontend em segundo plano e aguarda 600ms para a porta 5173 estar pronta
+Write-Host "⚡ Iniciando Frontend Vite & Navegador (http://localhost:5173)..." -ForegroundColor Yellow
+Start-Process "C:\Program Files\nodejs\npm.cmd" -ArgumentList "run", "dev" -WorkingDirectory "$PSScriptRoot\frontend" -WindowStyle Hidden
+Start-Sleep -Milliseconds 600
+Start-Process "http://localhost:5173"
 
-Write-Host "[1/3] Iniciando o servidor Vite Frontend (Silencioso em segundo plano)..." -ForegroundColor Yellow
-Start-Process -FilePath "cmd.exe" -ArgumentList "/c cd /d `"$PSScriptRoot\frontend`" && npm run dev" -WindowStyle Hidden
 
-Write-Host "[2/3] Carregando interface web no navegador (Reutilizando janela existente)..." -ForegroundColor Yellow
-$chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-if (Test-Path $chromePath) {
-    Start-Process $chromePath "-app=http://localhost:5173"
-} else {
-    Start-Process "http://localhost:5173"
-}
-
-Write-Host "[3/3] Executando o backend FastAPI em primeiro plano (Console de Logs em Tempo Real)..." -ForegroundColor Yellow
+# 2. Executa o Backend FastAPI em primeiro plano
+Write-Host "🚀 Executando Backend FastAPI (Console em Tempo Real)..." -ForegroundColor Green
 Write-Host ""
 
 Set-Location "$PSScriptRoot"
 & "$PSScriptRoot\venv\Scripts\python.exe" -m uvicorn backend.main:app --port 8000
+
