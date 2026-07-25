@@ -1,46 +1,93 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { jarvisSocket } from '../services/websocket';
+
+export interface AudioInputDevice {
+  deviceId: string;
+  label: string;
+}
 
 export const useVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState<number>(0);
+  const [audioDevices, setAudioDevices] = useState<AudioInputDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  const startRecording = useCallback(async () => {
+  // Enumera os microfones físicos/virtuais disponíveis no sistema do navegador
+  const refreshDevices = useCallback(async () => {
     try {
-      console.log('🎙️ [STT DEBUG] Solicitando permissão de microfone...');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        return;
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices
+        .filter((d) => d.kind === 'audioinput')
+        .map((d, index) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Microfone ${index + 1}`
+        }));
+
+      setAudioDevices(audioInputs);
       
-      // Garantir conexão WebSocket ativa
+      // Define dispositivo padrão se nenhum selecionado
+      if (audioInputs.length > 0 && !selectedDeviceId) {
+        setSelectedDeviceId(audioInputs[0].deviceId);
+      }
+    } catch (err) {
+      console.warn('⚠️ Não foi possível enumerar os microfones:', err);
+    }
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
+    refreshDevices();
+  }, [refreshDevices]);
+
+  const startRecording = useCallback(async (overrideDeviceId?: string) => {
+    try {
+      console.log('🎙️ [STT DEBUG] Solicitando permissão do microfone...');
       jarvisSocket.connect('dev-jwt-token');
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
-      });
+      const targetDeviceId = overrideDeviceId || selectedDeviceId;
+      const audioConstraints: any = {
+        channelCount: 1,
+        sampleRate: 16000,
+        echoCancellation: true,
+        noiseSuppression: true
+      };
+
+      if (targetDeviceId) {
+        audioConstraints.deviceId = { exact: targetDeviceId };
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      } catch (err) {
+        // Fallback para microfone padrão se o ID exato falhar
+        console.warn('⚠️ Falha ao abrir microfone exato, usando padrão:', err);
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true }
+        });
+      }
+
       streamRef.current = stream;
+      refreshDevices();
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioCtx({ sampleRate: 16000 });
       
       if (audioContext.state === 'suspended') {
         await audioContext.resume();
-        console.log('🎙️ [STT DEBUG] AudioContext resumido de suspended para running.');
       }
 
       audioContextRef.current = audioContext;
 
       const source = audioContext.createMediaStreamSource(stream);
-      // bufferSize=4096 (~256ms por frame PCM a 16kHz)
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor; // Evita garbage collection do node no browser
-
-      let frameCount = 0;
+      processorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
@@ -53,22 +100,14 @@ export const useVoiceRecorder = () => {
           sumSquares += s * s;
         }
 
-        frameCount++;
-        if (frameCount % 10 === 0) {
-          console.log(`🎙️ [STT STREAMING] Enviando frame #${frameCount} (${pcmData.byteLength} bytes PCM) ao backend...`);
-        }
-
-        // Transmite o buffer PCM bruto via WebSocket
         jarvisSocket.sendBinary(pcmData.buffer);
 
-        // Atualiza o medidor visual de volume
         const rms = Math.sqrt(sumSquares / inputData.length);
         setVolumeLevel(Math.min(1, rms * 5));
       };
 
       source.connect(processor);
 
-      // Conecta o processor a um canal mudo para manter o audioContext ativo sem microfonia
       const silenceGain = audioContext.createGain();
       silenceGain.gain.value = 0;
       processor.connect(silenceGain);
@@ -77,9 +116,9 @@ export const useVoiceRecorder = () => {
       setIsRecording(true);
       console.log('✅ [STT DEBUG] Captação de microfone ativada e transmitindo em tempo real!');
     } catch (err) {
-      console.error('❌ [STT ERROR] Erro ao acessar microfone:', err);
+      console.error('❌ [STT ERROR] Erro ao acessar o microfone selecionado:', err);
     }
-  }, []);
+  }, [selectedDeviceId, refreshDevices]);
 
   const stopRecording = useCallback(() => {
     if (processorRef.current) {
@@ -99,9 +138,21 @@ export const useVoiceRecorder = () => {
     console.log('🛑 [STT DEBUG] Captação de microfone encerrada.');
   }, []);
 
+  const changeMicrophone = useCallback(async (newDeviceId: string) => {
+    setSelectedDeviceId(newDeviceId);
+    if (isRecording) {
+      stopRecording();
+      await startRecording(newDeviceId);
+    }
+  }, [isRecording, stopRecording, startRecording]);
+
   return {
     isRecording,
     volumeLevel,
+    audioDevices,
+    selectedDeviceId,
+    setSelectedDeviceId: changeMicrophone,
+    refreshDevices,
     startRecording,
     stopRecording
   };

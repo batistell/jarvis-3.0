@@ -21,8 +21,17 @@ export const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [partialTranscript, setPartialTranscript] = useState<string>('');
 
-  // Hook de gravação de voz PCM 16kHz
-  const { isRecording, volumeLevel, startRecording, stopRecording } = useVoiceRecorder();
+  // Hook de gravação de voz PCM 16kHz com seleção de microfone
+  const {
+    isRecording,
+    volumeLevel,
+    audioDevices,
+    selectedDeviceId,
+    setSelectedDeviceId,
+    refreshDevices,
+    startRecording,
+    stopRecording
+  } = useVoiceRecorder();
 
   // Monitora estado de autenticação do Firebase
   useEffect(() => {
@@ -183,6 +192,10 @@ export const App: React.FC = () => {
         connectionStatus={connectionStatus}
         voiceState={voiceState}
         user={user}
+        audioDevices={audioDevices}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={setSelectedDeviceId}
+        onRefreshDevices={refreshDevices}
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onLogout={handleLogout}
       />

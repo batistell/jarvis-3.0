@@ -1,11 +1,17 @@
 import React from 'react';
 import { ConnectionStatus, VoiceState, UserProfile } from '../types';
+import { AudioInputDevice } from '../hooks/useVoiceRecorder';
+import { MicrophoneSelector } from './MicrophoneSelector';
 import { Cpu, Wifi, WifiOff, User as UserIcon, LogOut, ShieldCheck, Activity } from 'lucide-react';
 
 interface HeaderProps {
   connectionStatus: ConnectionStatus;
   voiceState: VoiceState;
   user: UserProfile | null;
+  audioDevices: AudioInputDevice[];
+  selectedDeviceId: string;
+  onSelectDevice: (deviceId: string) => void;
+  onRefreshDevices: () => void;
   onOpenAuth: () => void;
   onLogout: () => void;
 }
@@ -14,6 +20,10 @@ export const Header: React.FC<HeaderProps> = ({
   connectionStatus,
   voiceState,
   user,
+  audioDevices,
+  selectedDeviceId,
+  onSelectDevice,
+  onRefreshDevices,
   onOpenAuth,
   onLogout
 }) => {
@@ -41,11 +51,19 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Status Bar Indicators */}
-      <div className="flex items-center gap-6">
+      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+        {/* Microphone Selector */}
+        <MicrophoneSelector
+          audioDevices={audioDevices}
+          selectedDeviceId={selectedDeviceId}
+          onSelectDevice={onSelectDevice}
+          onRefreshDevices={onRefreshDevices}
+        />
+
         {/* Voice State Badge */}
         <div className="flex items-center gap-2 font-mono text-xs px-3 py-1.5 rounded-md bg-slate-900/80 border border-cyan-500/20">
           <Activity className={`w-4 h-4 ${voiceState !== 'idle' ? 'text-green-400 animate-pulse' : 'text-cyan-400'}`} />
-          <span className="text-gray-400">STATE:</span>
+          <span className="text-gray-400 hidden sm:inline">STATE:</span>
           <span className="text-cyan-300 uppercase tracking-wider font-semibold">{voiceState}</span>
         </div>
 
