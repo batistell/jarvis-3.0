@@ -400,16 +400,17 @@ class HAService:
         text_clean = user_text.strip().lower()
         text_clean = re.sub(r'^(pode|poderia|por\s+favor|jarvis|por\s+gentileza|você\s+pode|faça\s+o\s+favor\s+de)\s+', '', text_clean).strip()
 
-        # Padrões de ativação (ON)
+        # Padrões de ativação (ON) com variações fonéticas de STT (ex: "lide a luz", "lida")
         on_match = re.search(
-            r'\b(liga|ligar|ligue|acende|acender|acenda|ativa|ativar|ative|turn\s*on)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
+            r'\b(liga|ligar|ligue|lida|lide|lido|acende|acender|acenda|ativa|ativar|ative|turn\s*on)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
             text_clean
         )
-        # Padrões de desativação (OFF)
+        # Padrões de desativação (OFF) com variações fonéticas de STT
         off_match = re.search(
-            r'\b(desliga|desligar|desligue|apaga|apagar|apague|desativa|desativar|desative|turn\s*off)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
+            r'\b(desliga|desligar|desligue|deslida|deslide|apaga|apagar|apague|desativa|desativar|desative|turn\s*off)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo|equipamento)?\s*(?:de|da|do)?\s*(.*))?',
             text_clean
         )
+
         # Padrões de afirmação no passado (ex: "agora desliguei", "já desliguei", "eu desliguei")
         past_match = re.search(
             r'\b(desliguei|apaguei|desativei|liguei|acendi|ativei)\b(?:\s*(?:a|o)?\s*(?:luz|lâmpada|lampada|tomada|interruptor|dispositivo)?\s*(?:de|da|do)?\s*(.*))?',
