@@ -7,6 +7,7 @@ from backend.config import settings
 from backend.services.auth_service import validate_firebase_token
 from backend.services.vad_service import BackendVADDetector
 from backend.services.stt_service import stt_service
+from backend.services.llm_service import llm_service
 
 # Garantir codificação UTF-8 no stdout/stderr no Windows
 if hasattr(sys.stdout, 'buffer') and getattr(sys.stdout, 'encoding', '').lower() != 'utf-8':
@@ -17,14 +18,17 @@ if hasattr(sys.stderr, 'buffer') and getattr(sys.stderr, 'encoding', '').lower()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Pré-carrega o modelo Whisper Large no início da execução da aplicação.
+    Pré-carrega o modelo Whisper Large e verifica a disponibilidade do modelo LLM.
     """
     print("\n" + "=" * 65)
-    print("🚀 INICIALIZANDO BACKEND DO JARVIS 3.0 (SERVIDORE STT & VAD)")
+    print("🚀 INICIALIZANDO BACKEND DO JARVIS 3.0 (SERVIDORES STT, LLM & VAD)")
     print("=" * 65, flush=True)
     
-    # Executa pré-carregamento do modelo Whisper Large
+    # Executa pré-carregamento do modelo Whisper STT
     stt_service.load_model()
+    
+    # Verifica/baixa modelo LLM no Ollama
+    await llm_service.ensure_model_loaded()
     
     print("\n🎧 [SERVER READY] Backend aguardando conexões WebSocket e áudio em tempo real...\n", flush=True)
     yield
@@ -124,6 +128,25 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             "text": transcribed_text,
                             "user": user_email
                         })
+
+                        # Geração de resposta LLM em tempo real (Qwen 2.5)
+                        print(f"🧠 [LLM GENERATING] Enviando ao {settings.OLLAMA_MODEL}...", flush=True)
+                        await websocket.send_json({"type": "llm_status", "status": "generating"})
+                        
+                        full_llm_response = ""
+                        async for chunk in llm_service.generate_stream(transcribed_text):
+                            full_llm_response += chunk
+                            await websocket.send_json({
+                                "type": "llm_chunk",
+                                "text": chunk
+                            })
+                        
+                        print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                        await websocket.send_json({
+                            "type": "llm_result",
+                            "text": full_llm_response.strip()
+                        })
+                        await websocket.send_json({"type": "stt_status", "status": "idle"})
                     else:
                         await websocket.send_json({"type": "stt_status", "status": "idle"})
                         

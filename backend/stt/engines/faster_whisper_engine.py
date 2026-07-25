@@ -94,18 +94,24 @@ class FasterWhisperEngine(BaseSTTEngine):
                 beam_size=1,
                 vad_filter=True,
                 condition_on_previous_text=False,
+                hallucination_silence_threshold=0.5,
+                no_speech_threshold=0.6,
                 initial_prompt=settings.WHISPER_INITIAL_PROMPT,
                 language="pt"
             )
 
             transcribed_fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
-            full_text = " ".join(transcribed_fragments).strip()
+            raw_text = " ".join(transcribed_fragments).strip()
+            
+            from backend.services.hallucination_filter import hallucination_filter
+            full_text = hallucination_filter.clean_text(raw_text)
+            
             elapsed_ms = (time.time() - start_time) * 1000.0
 
             if full_text:
                 print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio]: \"{full_text}\"\n", flush=True)
             else:
-                print(f"ℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada)\n", flush=True)
+                print(f"ℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada / alucinação filtrada)\n", flush=True)
 
             return full_text
 
@@ -131,6 +137,8 @@ class FasterWhisperEngine(BaseSTTEngine):
                 language="pt"
             )
             fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
-            return " ".join(fragments).strip()
+            raw = " ".join(fragments).strip()
+            from backend.services.hallucination_filter import hallucination_filter
+            return hallucination_filter.clean_text(raw)
         except Exception:
             return ""

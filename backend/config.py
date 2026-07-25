@@ -7,13 +7,26 @@ class Settings:
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
     
-    # STT Faster Whisper (Large-v3-turbo + CUDA por padrão para ultra performance)
-    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+    # Seleção de Motor STT ("faster-whisper", "mock", etc)
+    STT_ENGINE: str = os.getenv("STT_ENGINE", "faster-whisper")
+    
+    # STT Faster Whisper (Large-v3 completo + CUDA por padrão para máxima precisão)
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cuda")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
     WHISPER_INITIAL_PROMPT: str = os.getenv(
         "WHISPER_INITIAL_PROMPT",
         "Jarvis assistente virtual de inteligência artificial local. comandos de voz em português e inglês."
+    )
+    
+    # Seleção e Configuração de Motor LLM (Nativo Python em Memória, Ollama, Qwen2.5)
+    LLM_ENGINE: str = os.getenv("LLM_ENGINE", "qwen-native")
+    NATIVE_LLM_MODEL: str = os.getenv("NATIVE_LLM_MODEL", "jncraton/Qwen2.5-3B-Instruct-ct2-int8")
+    OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    JARVIS_SYSTEM_PROMPT: str = os.getenv(
+        "JARVIS_SYSTEM_PROMPT",
+        "Você é o Jarvis 3.0, um assistente pessoal conciso e inteligente. Responda em português de forma direta e curta para ser lido em voz alta pelo sistema TTS."
     )
     
     # VAD backend config
