@@ -58,8 +58,25 @@ async def root():
         "app": "JARVIS 3.0",
         "status": "online",
         "model": settings.WHISPER_MODEL,
-        "engine": "Python FastAPI + faster-whisper + Ollama"
+        "engine": "Python FastAPI + faster-whisper + Qwen 2.5 Native"
     }
+
+from backend.services.health_service import health_service
+
+@app.get("/api/health")
+async def get_health_check():
+    """
+    Endpoint de Health Check para monitoramento de saúde da GPU (VRAM, Utilização, Temperatura)
+    e status dos modelos de IA (STT, LLM, TTS).
+    """
+    return await health_service.get_full_health()
+
+@app.post("/api/health/gc")
+async def trigger_garbage_collection():
+    """
+    Força coleta de lixo e limpeza de memória.
+    """
+    return health_service.release_memory()
 
 active_voice_socket: WebSocket | None = None
 

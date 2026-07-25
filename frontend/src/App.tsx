@@ -4,6 +4,7 @@ import { VoiceOrb } from './components/VoiceOrb';
 import { ChatWindow } from './components/ChatWindow';
 import { MessageInput } from './components/MessageInput';
 import { ControlPanel } from './components/ControlPanel';
+import { GPUHealthWidget } from './components/GPUHealthWidget';
 import { AuthModal } from './components/AuthModal';
 import { ConnectionStatus, VoiceState, Message, UserProfile } from './types';
 import { useVoiceRecorder } from './hooks/useVoiceRecorder';
@@ -223,6 +224,9 @@ export const App: React.FC = () => {
 
         {/* Home Assistant Quick Actions */}
         <ControlPanel onQuickAction={handleSendMessage} />
+
+        {/* GPU & AI Models Health Monitoring Widget */}
+        <GPUHealthWidget />
       </main>
 
       {/* Auth Modal */}
