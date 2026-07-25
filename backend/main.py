@@ -55,21 +55,34 @@ async def root():
         "engine": "Python FastAPI + faster-whisper + Ollama"
     }
 
+active_voice_socket: WebSocket | None = None
+
 @app.websocket("/ws/voice")
 async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(default="dev-token")):
     """
     Endpoint WebSocket de voz bidirecional.
-    Loga tudo o que receber de áudio do frontend em tempo real no console do terminal.
+    Rejeita conexões duplicadas para garantir exatamente 1 sessão de voz ativa.
     """
+    global active_voice_socket
+
     user_email = await validate_firebase_token(token)
     if not user_email:
         print("\n❌ [AUTH ERROR] Conexão rejeitada: token de autenticação inválido.")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    # Se já houver uma conexão ativa aberta, rejeita a tentativa duplicada imediatamente
+    if active_voice_socket is not None:
+        try:
+            if active_voice_socket.client_state.name == "CONNECTED":
+                await websocket.close(code=1000, reason="Sessão de voz já ativa")
+                return
+        except Exception:
+            active_voice_socket = None
+
     await websocket.accept()
-    print(f"\n⚡ [WEBSOCKET CONNECTED] Cliente conectado ao canal de voz: {user_email}")
-    print("   Aguardando streaming de áudio do microfone...\n")
+    active_voice_socket = websocket
+    print(f"\n⚡ [WEBSOCKET CONNECTED] Conexão de voz única ativa para: {user_email}\n")
 
     vad_detector = BackendVADDetector()
     last_partial_text = ""
@@ -93,7 +106,7 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                     partial_text = await stt_service.transcribe_partial_async(partial_audio)
                     if partial_text and partial_text != last_partial_text:
                         last_partial_text = partial_text
-                        print(f"\r\033[K🎙️  [LIVE STT]: \"{partial_text}\"", end="", flush=True)
+                        print(f"🎙️  [LIVE STT]: \"{partial_text}\"", flush=True)
                         await websocket.send_json({
                             "type": "stt_partial",
                             "text": partial_text
@@ -127,6 +140,9 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
             await websocket.close()
         except:
             pass
+    finally:
+        if active_voice_socket == websocket:
+            active_voice_socket = None
 
 if __name__ == "__main__":
     import uvicorn

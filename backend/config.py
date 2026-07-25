@@ -11,6 +11,10 @@ class Settings:
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "large-v3-turbo")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cuda")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
+    WHISPER_INITIAL_PROMPT: str = os.getenv(
+        "WHISPER_INITIAL_PROMPT",
+        "Jarvis assistente virtual de inteligência artificial local. Batistell, comandos de voz em português."
+    )
     
     # VAD backend config
     VAD_SILENCE_THRESHOLD_RMS: float = float(os.getenv("VAD_SILENCE_THRESHOLD_RMS", "0.015"))

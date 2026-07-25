@@ -99,6 +99,7 @@ class STTService:
                 beam_size=1, # Greedy decoding ultra-rápido
                 vad_filter=True, # Filtra silêncios internos no buffer
                 condition_on_previous_text=False,
+                initial_prompt=settings.WHISPER_INITIAL_PROMPT,
                 language="pt"
             )
 
@@ -107,9 +108,9 @@ class STTService:
             elapsed_ms = (time.time() - start_time) * 1000.0
 
             if full_text:
-                print(f"\r\033[K✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio]: \"{full_text}\"\n", flush=True)
+                print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio]: \"{full_text}\"\n", flush=True)
             else:
-                print(f"\r\033[Kℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada)\n", flush=True)
+                print(f"ℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada)\n", flush=True)
 
             return full_text
 
@@ -136,6 +137,7 @@ class STTService:
                 beam_size=1,
                 vad_filter=False,
                 condition_on_previous_text=False,
+                initial_prompt=settings.WHISPER_INITIAL_PROMPT,
                 language="pt"
             )
             fragments = [seg.text.strip() for seg in segments if seg.text.strip()]

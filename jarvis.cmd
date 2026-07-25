@@ -11,8 +11,12 @@ set PATH=C:\Program Files\nodejs;%PATH%
 echo [1/3] Iniciando o servidor Vite Frontend (Silencioso em segundo plano)...
 powershell -Command "Start-Process cmd.exe -ArgumentList '/c cd /d ""%~dp0frontend"" && npm run dev' -WindowStyle Hidden"
 
-echo [2/3] Abrindo a interface web no navegador...
-start "" "http://localhost:5173"
+echo [2/3] Carregando interface web no navegador (Reutilizando janela existente)...
+if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
+    start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --app=http://localhost:5173
+) else (
+    start "" "http://localhost:5173"
+)
 
 echo [3/3] Executando o backend FastAPI em primeiro plano (Console de Logs em Tempo Real)...
 echo.

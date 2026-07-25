@@ -9,8 +9,13 @@ Write-Host ""
 Write-Host "[1/3] Iniciando o servidor Vite Frontend (Silencioso em segundo plano)..." -ForegroundColor Yellow
 Start-Process -FilePath "cmd.exe" -ArgumentList "/c cd /d `"$PSScriptRoot\frontend`" && npm run dev" -WindowStyle Hidden
 
-Write-Host "[2/3] Abrindo a interface web no navegador..." -ForegroundColor Yellow
-Start-Process "http://localhost:5173"
+Write-Host "[2/3] Carregando interface web no navegador (Reutilizando janela existente)..." -ForegroundColor Yellow
+$chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+if (Test-Path $chromePath) {
+    Start-Process $chromePath "-app=http://localhost:5173"
+} else {
+    Start-Process "http://localhost:5173"
+}
 
 Write-Host "[3/3] Executando o backend FastAPI em primeiro plano (Console de Logs em Tempo Real)..." -ForegroundColor Yellow
 Write-Host ""

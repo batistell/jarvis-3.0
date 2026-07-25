@@ -51,17 +51,12 @@ class BackendVADDetector:
         now = time.time()
         state_label = "FALANDO 🎙️" if rms >= self.silence_threshold_rms else "SILÊNCIO 💤"
 
-        # Log visual limpo em tempo real com limpeza da linha (\033[K)
-        bar_length = int(min(16, rms * 80))
-        visual_bar = "█" * bar_length + "░" * (16 - bar_length)
-        print(f"\r\033[K[AUDIO #{self.chunk_count:03d}] RMS: {rms:.4f} [{visual_bar}] {state_label}", end="", flush=True)
-
         partial_audio = None
 
         if rms >= self.silence_threshold_rms:
             if not self.is_speech_active:
                 self.is_speech_active = True
-                print(f"\r\033[K🎙️  [VAD] Fala iniciada pelo usuário...", flush=True)
+                print(f"\n🎙️  [VAD] Fala iniciada (RMS: {rms:.4f})", flush=True)
             self.silence_start_time = None
 
             # Durante a fala ativa, libera o buffer parcial a cada 2 chunks (~400ms) para transcrição live
@@ -76,11 +71,11 @@ class BackendVADDetector:
                     if len(self.audio_buffer) >= self.min_speech_duration_bytes:
                         completed_audio = bytes(self.audio_buffer)
                         total_sec = len(completed_audio) / 32000.0
-                        print(f"\r\033[K⏹️  [VAD] Pausa detectada ({total_sec:.1f}s de áudio). Processando...", flush=True)
+                        print(f"⏹️  [VAD] Pausa detectada ({total_sec:.1f}s de áudio)", flush=True)
                         self.reset()
                         return True, completed_audio, None
                     else:
-                        print(f"\r\033[Kℹ️  [VAD] Ruído descartado ({len(self.audio_buffer)} bytes).", flush=True)
+                        print(f"ℹ️  [VAD] Ruído descartado ({len(self.audio_buffer)} bytes)", flush=True)
                         self.reset()
 
         return False, None, partial_audio
