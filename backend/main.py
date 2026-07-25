@@ -212,7 +212,14 @@ async def ha_chat_endpoint(req: HAChatRequest):
             reply_text = await llm_service.generate(prompt, history=history)
             reply_clean = reply_text.strip()
 
+            # Guardrail Anti-Alucinação de Hardware: impede o LLM de simular confirmações de sensor sem hardware acionado
+            reply_lower = reply_clean.lower()
+            if "confirmado pelo sensor" in reply_lower or ("dispositivo" in reply_lower and ("ligado" in reply_lower or "desligado" in reply_lower)):
+                print(f"🛡️ [LLM HALLUCINATION BLOCKED] Bloqueada alucinação de hardware do LLM: \"{reply_clean}\"", flush=True)
+                reply_clean = "Desculpe, não entendi o comando. Como posso ajudar?"
+
         conversation_service.add_assistant_message(conversation_id, reply_clean)
+
     except Exception as e:
         print(f"❌ [HA ASSIST CHAT ERROR] Erro no processamento: {e}", flush=True)
         reply_clean = "Desculpe, ocorreu um erro ao processar a resposta no Jarvis."
@@ -421,8 +428,14 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             if tts_buffer.strip():
                                 await _flush_tts(tts_buffer)
 
-                            llm_elapsed = (time.time() - llm_start_t) * 1000.0
+                             llm_elapsed = (time.time() - llm_start_t) * 1000.0
                             health_service.record_llm_latency(llm_elapsed)
+
+                            # Guardrail Anti-Alucinação: se o LLM tentar imitar confirmação de hardware no stream de voz
+                            reply_lower = full_llm_response.lower()
+                            if "confirmado pelo sensor" in reply_lower or ("dispositivo" in reply_lower and ("ligado" in reply_lower or "desligado" in reply_lower)):
+                                print(f"🛡️ [LLM HALLUCINATION BLOCKED] Bloqueada alucinação de hardware do LLM no WebSocket: \"{full_llm_response}\"", flush=True)
+                                full_llm_response = "Desculpe, não entendi o comando. Como posso ajudar?"
 
                         conversation_service.add_assistant_message(session_id, full_llm_response.strip())
                         print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
@@ -458,9 +471,16 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             "type": "llm_chunk",
                             "text": chunk
                         })
-                
+                    
+                    # Guardrail Anti-Alucinação
+                    reply_lower = full_llm_response.lower()
+                    if "confirmado pelo sensor" in reply_lower or ("dispositivo" in reply_lower and ("ligado" in reply_lower or "desligado" in reply_lower)):
+                        print(f"🛡️ [LLM HALLUCINATION BLOCKED] Bloqueada alucinação de hardware do LLM no chat texto: \"{full_llm_response}\"", flush=True)
+                        full_llm_response = "Desculpe, não entendi o comando. Como posso ajudar?"
+
                 conversation_service.add_assistant_message(session_id, full_llm_response.strip())
                 print(f"🤖 [JARVIS RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+
 
                 
                 # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
