@@ -81,8 +81,30 @@ class FasterWhisperEngine(BaseSTTEngine):
         res = self.transcribe_pcm_with_info(pcm_bytes)
         return res.get("text", "")
 
+    # Idiomas permitidos para detecção — apenas PT e EN
+    ALLOWED_LANGUAGES = {"pt", "en"}
+
+    def _pick_allowed_language(self, audio_float32) -> str:
+        """
+        Detecta o idioma do áudio e força para PT ou EN.
+        Usa model.detect_language() para obter probabilidades de todos os idiomas,
+        então seleciona o de maior score dentro de {pt, en}.
+        """
+        try:
+            lang, all_probs = self.model.detect_language(audio_float32)
+            if lang in self.ALLOWED_LANGUAGES:
+                return lang
+            # O idioma detectado não é PT nem EN — escolhe qual dos dois tem maior probabilidade
+            pt_score = all_probs.get("pt", 0.0)
+            en_score = all_probs.get("en", 0.0)
+            forced = "pt" if pt_score >= en_score else "en"
+            print(f"🌐 [STT LANG OVERRIDE] '{lang.upper()}' → '{forced.upper()}' (pt={pt_score:.2f} en={en_score:.2f})", flush=True)
+            return forced
+        except Exception:
+            return "pt"
+
     def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
-        """Transcreve o áudio PCM final com detecção automática de idioma do Whisper Large-v3."""
+        """Transcreve o áudio PCM com detecção de idioma restrita a PT e EN."""
         if not pcm_bytes or self.model is None:
             self.load_model()
 
@@ -95,6 +117,10 @@ class FasterWhisperEngine(BaseSTTEngine):
         duration_sec = len(audio_float32) / 16000.0
 
         try:
+            # Passo 1: detecção rápida de idioma → restrita a PT e EN
+            forced_lang = self._pick_allowed_language(audio_float32)
+
+            # Passo 2: transcrição com idioma forçado (mais rápido e preciso que language=None)
             segments, info = self.model.transcribe(
                 audio_float32,
                 beam_size=1,
@@ -103,7 +129,7 @@ class FasterWhisperEngine(BaseSTTEngine):
                 hallucination_silence_threshold=0.5,
                 no_speech_threshold=0.6,
                 initial_prompt=settings.WHISPER_INITIAL_PROMPT if settings.WHISPER_INITIAL_PROMPT else None,
-                language=None  # Detecção automática multilíngue do Large-v3!
+                language=forced_lang
             )
 
             transcribed_fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
@@ -116,17 +142,16 @@ class FasterWhisperEngine(BaseSTTEngine):
             from backend.services.health_service import health_service
             health_service.record_stt_latency(elapsed_ms)
             
-            detected_lang = getattr(info, "language", "pt")
             prob = getattr(info, "language_probability", 1.0)
 
             if full_text:
-                print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio | Idioma: {detected_lang.upper()} ({prob*100:.0f}%)]: \"{full_text}\"\n", flush=True)
+                print(f"✨  [STT {elapsed_ms:.0f}ms | {duration_sec:.1f}s áudio | Idioma: {forced_lang.upper()} ({prob*100:.0f}%)]: \"{full_text}\"\n", flush=True)
             else:
                 print(f"ℹ️  [STT {elapsed_ms:.0f}ms]: (Silêncio / sem fala identificada / alucinação filtrada)\n", flush=True)
 
             return {
                 "text": full_text,
-                "language": detected_lang,
+                "language": forced_lang,
                 "probability": prob
             }
 
@@ -143,13 +168,14 @@ class FasterWhisperEngine(BaseSTTEngine):
         audio_float32 = pcm_int16.astype(np.float32) / 32768.0
 
         try:
+            forced_lang = self._pick_allowed_language(audio_float32)
             segments, info = self.model.transcribe(
                 audio_float32,
                 beam_size=1,
                 vad_filter=False,
                 condition_on_previous_text=False,
                 initial_prompt=settings.WHISPER_INITIAL_PROMPT if settings.WHISPER_INITIAL_PROMPT else None,
-                language=None
+                language=forced_lang
             )
             fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
             raw = " ".join(fragments).strip()
