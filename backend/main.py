@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
+import base64
 from backend.services.auth_service import validate_firebase_token
 from backend.services.vad_service import BackendVADDetector
 from backend.services.stt_service import stt_service
 from backend.services.llm_service import llm_service
+from backend.services.tts_service import tts_service
 
 # Garantir codificação UTF-8 no stdout/stderr no Windows
 if hasattr(sys.stdout, 'buffer') and getattr(sys.stdout, 'encoding', '').lower() != 'utf-8':
@@ -142,6 +144,20 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                             })
                         
                         print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                        
+                        # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
+                        if full_llm_response.strip():
+                            try:
+                                audio_bytes = await tts_service.synthesize_async(full_llm_response.strip())
+                                if audio_bytes:
+                                    audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                                    await websocket.send_json({
+                                        "type": "tts_audio",
+                                        "audio": audio_b64
+                                    })
+                            except Exception as tts_err:
+                                print(f"⚠️ [TTS ERROR] Falha ao sintetizar áudio TTS: {tts_err}", flush=True)
+
                         await websocket.send_json({
                             "type": "llm_result",
                             "text": full_llm_response.strip()
@@ -166,6 +182,20 @@ async def voice_websocket_endpoint(websocket: WebSocket, token: str = Query(defa
                     })
                 
                 print(f"🤖 [LLM RESPONSE]: \"{full_llm_response.strip()}\"\n", flush=True)
+                
+                # Sintetiza áudio TTS para ser reproduzido via Web Audio API no navegador cliente
+                if full_llm_response.strip():
+                    try:
+                        audio_bytes = await tts_service.synthesize_async(full_llm_response.strip())
+                        if audio_bytes:
+                            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                            await websocket.send_json({
+                                "type": "tts_audio",
+                                "audio": audio_b64
+                            })
+                    except Exception as tts_err:
+                        print(f"⚠️ [TTS ERROR] Falha ao sintetizar áudio TTS: {tts_err}", flush=True)
+
                 await websocket.send_json({
                     "type": "llm_result",
                     "text": full_llm_response.strip()

@@ -29,6 +29,10 @@ class Settings:
         "Você é o Jarvis 3.0, um assistente pessoal conciso e inteligente. Responda em português de forma direta e curta para ser lido em voz alta pelo sistema TTS."
     )
     
+    # Seleção e Configuração de Motor TTS (Edge-TTS, Piper, etc)
+    TTS_ENGINE: str = os.getenv("TTS_ENGINE", "edge-tts")
+    TTS_VOICE: str = os.getenv("TTS_VOICE", "pt-BR-AntonioNeural")
+    
     # VAD backend config
     VAD_SILENCE_THRESHOLD_RMS: float = float(os.getenv("VAD_SILENCE_THRESHOLD_RMS", "0.015"))
     VAD_SILENCE_DURATION_MS: float = float(os.getenv("VAD_SILENCE_DURATION_MS", "450"))

@@ -8,6 +8,7 @@ import { AuthModal } from './components/AuthModal';
 import { ConnectionStatus, VoiceState, Message, UserProfile } from './types';
 import { useVoiceRecorder } from './hooks/useVoiceRecorder';
 import { jarvisSocket } from './services/websocket';
+import { audioQueuePlayer } from './services/audioQueue';
 import { loginWithGoogle, logoutFirebase, auth } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -106,6 +107,18 @@ export const App: React.FC = () => {
       } else if (data.type === 'llm_result') {
         setVoiceState('idle');
         setIsGenerating(false);
+      } else if (data.type === 'tts_audio' && data.audio) {
+        try {
+          const binaryString = window.atob(data.audio);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          audioQueuePlayer.enqueueChunk(bytes.buffer);
+        } catch (err) {
+          console.error('Erro ao decodificar e tocar áudio TTS no navegador:', err);
+        }
       }
     });
 
