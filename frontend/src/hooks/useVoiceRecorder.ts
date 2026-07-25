@@ -1,19 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
 import { jarvisSocket } from '../services/websocket';
 
-export interface UseVoiceRecorderProps {
-  onSpeechEnd?: () => void;
-}
-
-export const useVoiceRecorder = ({ onSpeechEnd }: UseVoiceRecorderProps = {}) => {
+export const useVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState<number>(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const silenceStartRef = useRef<number>(0);
-
-  const SILENCE_THRESHOLD = 0.02;
-  const SILENCE_DURATION_MS = 900;
 
   const startRecording = useCallback(async () => {
     try {
@@ -38,25 +30,13 @@ export const useVoiceRecorder = ({ onSpeechEnd }: UseVoiceRecorderProps = {}) =>
           sumSquares += s * s;
         }
 
-        // Transmite o buffer PCM bruto via WebSocket
+        // Transmite o buffer PCM bruto em streaming contínuo para o backend (FastAPI)
+        // O VAD no servidor cuidará de detectar o início e o fim da fala (pausa)
         jarvisSocket.sendBinary(pcmData.buffer);
 
-        // Calcula volume RMS para o visualizador e VAD
+        // Atualiza o medidor visual de volume no Orbe
         const rms = Math.sqrt(sumSquares / inputData.length);
         setVolumeLevel(Math.min(1, rms * 5));
-
-        // Detecção de Silêncio (VAD)
-        if (rms < SILENCE_THRESHOLD) {
-          if (silenceStartRef.current === 0) {
-            silenceStartRef.current = Date.now();
-          } else if (Date.now() - silenceStartRef.current > SILENCE_DURATION_MS) {
-            jarvisSocket.sendText("SPEECH_END");
-            if (onSpeechEnd) onSpeechEnd();
-            silenceStartRef.current = 0;
-          }
-        } else {
-          silenceStartRef.current = 0;
-        }
       };
 
       source.connect(processor);
@@ -66,7 +46,7 @@ export const useVoiceRecorder = ({ onSpeechEnd }: UseVoiceRecorderProps = {}) =>
     } catch (err) {
       console.error('Erro ao acessar microfone:', err);
     }
-  }, [onSpeechEnd]);
+  }, []);
 
   const stopRecording = useCallback(() => {
     if (streamRef.current) {

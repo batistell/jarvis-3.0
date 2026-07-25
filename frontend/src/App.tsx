@@ -56,7 +56,13 @@ export const App: React.FC = () => {
     });
 
     jarvisSocket.onTextMessage((data) => {
-      if (data.type === 'stt_result') {
+      if (data.type === 'stt_status') {
+        if (data.status === 'transcribing') {
+          setVoiceState('transcribing');
+        } else if (data.status === 'idle') {
+          setVoiceState('idle');
+        }
+      } else if (data.type === 'stt_result') {
         setVoiceState('thinking');
         const userMsg: Message = {
           id: Date.now().toString(),
@@ -65,16 +71,6 @@ export const App: React.FC = () => {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         setMessages((prev) => [...prev, userMsg]);
-        
-        // Adiciona placeholder da mensagem do Jarvis
-        const jarvisMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages((prev) => [...prev, jarvisMsg]);
-        setIsGenerating(true);
       } else if (data.type === 'text_token') {
         setVoiceState('speaking');
         setMessages((prev) => {
