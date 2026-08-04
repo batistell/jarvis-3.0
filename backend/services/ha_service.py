@@ -501,21 +501,36 @@ class HAService:
         entity_id = None
 
         # RESOLUÇÃO DE ANÁFORAS / PRONOMES / CÔMODO OMITIDO
-        if not target_norm or target_norm in ANAPHORA_PRONOUNS:
+        has_explicit_anaphora = target_norm in ANAPHORA_PRONOUNS
+
+        if has_explicit_anaphora and target_norm != "":
             last_dev = conversation_service.get_last_device(session_id)
             if last_dev:
                 entity_id = last_dev["entity_id"]
                 friendly = last_dev["friendly_name"]
-                print(f"🧠 [ANAPHORA RESOLUTION] Mapeado termo pronominal '{target_clean or 'omitido'}' para o último dispositivo do contexto: '{friendly}' ({entity_id})", flush=True)
+                print(f"🧠 [ANAPHORA RESOLUTION] Mapeado termo pronominal '{target_clean}' para o último dispositivo do contexto: '{friendly}' ({entity_id})", flush=True)
             else:
-                # Registra o comando como pendente para aguardar o complemento do cômodo no próximo turno
-                conversation_service.set_pending_action(session_id, action=action, domain="light")
-                msg = "Não sei a qual luz ou dispositivo você está se referindo. Por favor especifique o cômodo (ex: 'escritório', 'sala')."
-                print(f"⚠️ [ANAPHORA RESOLUTION] {msg}", flush=True)
+                conversation_service.set_pending_action(session_id, action, domain="light")
+                action_pt = "ligar" if action == "turn_on" else ("desligar" if action == "turn_off" else "alternar")
                 return {
                     "success": False,
                     "verified": False,
-                    "message": msg
+                    "message": f"Não sei a qual luz ou dispositivo você deseja {action_pt}. Por favor especifique o cômodo (ex: 'escritório', 'sala')."
+                }
+        elif not target_norm:
+            # Se o alvo for completamente omisso (ex: apenas "Desligar."), usa contexto se houver, ou solicita o cômodo
+            last_dev = conversation_service.get_last_device(session_id)
+            if last_dev:
+                entity_id = last_dev["entity_id"]
+                friendly = last_dev["friendly_name"]
+                print(f"🧠 [ANAPHORA RESOLUTION] Mapeado comando sem alvo para o último dispositivo do contexto: '{friendly}' ({entity_id})", flush=True)
+            else:
+                conversation_service.set_pending_action(session_id, action, domain="light")
+                action_pt = "ligar" if action == "turn_on" else ("desligar" if action == "turn_off" else "alternar")
+                return {
+                    "success": False,
+                    "verified": False,
+                    "message": f"Não sei a qual luz ou dispositivo você deseja {action_pt}. Por favor especifique o cômodo (ex: 'escritório', 'sala')."
                 }
         else:
             # Limpa qualquer ação pendente pois um comando completo foi fornecido

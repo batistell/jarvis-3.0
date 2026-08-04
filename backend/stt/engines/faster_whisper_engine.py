@@ -103,8 +103,32 @@ class FasterWhisperEngine(BaseSTTEngine):
         except Exception:
             return "pt"
 
-    def transcribe_pcm_with_info(self, pcm_bytes: bytes) -> dict:
-        """Transcreve o áudio PCM com detecção de idioma restrita a PT e EN."""
+    @staticmethod
+    def _preprocess_audio(audio_float32: np.ndarray) -> np.ndarray:
+        """
+        Pipeline leve de limpeza de sinal de áudio:
+        1. Filtro Passa-Alta IIR (80Hz): Remove ruídos graves de fundo (ventoinhas/ar-condicionado).
+        2. Normalização suave de pico (sem amplificação excessiva de ruído de fundo).
+        """
+        if len(audio_float32) == 0:
+            return audio_float32
+
+        # 1. Filtro Passa-Alta (IIR 80Hz a 16kHz)
+        y = np.zeros_like(audio_float32)
+        alpha = 0.9687
+        for i in range(1, len(audio_float32)):
+            y[i] = alpha * (y[i-1] + audio_float32[i] - audio_float32[i-1])
+
+        # 2. Normalização suave (apenas impede clipping > 0.95, NUNCA amplifica ruído de fundo)
+        peak = np.max(np.abs(y))
+        if peak > 0.95:
+            y = y * (0.95 / peak)
+
+        return y
+
+    def transcribe_pcm_with_info(self, pcm_bytes: bytes, custom_prompt: str | None = None) -> dict:
+        """Transcreve o áudio PCM limpando ruído grave e mantendo alta fidelidade fonética."""
+
         if not pcm_bytes or self.model is None:
             self.load_model()
 
@@ -113,24 +137,37 @@ class FasterWhisperEngine(BaseSTTEngine):
 
         start_time = time.time()
         pcm_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
-        audio_float32 = pcm_int16.astype(np.float32) / 32768.0
-        duration_sec = len(audio_float32) / 16000.0
+        audio_raw = pcm_int16.astype(np.float32) / 32768.0
+        duration_sec = len(audio_raw) / 16000.0
+
+        # Aplica o pipeline de limpeza e condicionamento de sinal de áudio
+        audio_float32 = self._preprocess_audio(audio_raw)
 
         try:
             # Passo 1: detecção rápida de idioma → restrita a PT e EN
             forced_lang = self._pick_allowed_language(audio_float32)
 
-            # Passo 2: transcrição com idioma forçado (mais rápido e preciso que language=None)
+            # Constrói o initial_prompt de domínio (Jarvis + Comandos + Vocabulário HA)
+            default_prompt = (
+                settings.WHISPER_INITIAL_PROMPT or
+                "Jarvis assistente. Comandos de automação residencial do Home Assistant: ligar, desligar, alternar, acender, apagar a luz do escritório, Office Light, luz da sala, cozinha, quarto, banheiro, tomada, dispositivo."
+            )
+            prompt = f"{default_prompt} {custom_prompt}".strip() if custom_prompt else default_prompt
+
+            # Passo 2: transcrição com GPU beam_size=5 e best_of=5 para máxima fidelidade fonética
             segments, info = self.model.transcribe(
                 audio_float32,
-                beam_size=1,
+                beam_size=5,
+                best_of=5,
                 vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=350),
                 condition_on_previous_text=False,
                 hallucination_silence_threshold=0.5,
                 no_speech_threshold=0.6,
-                initial_prompt=settings.WHISPER_INITIAL_PROMPT if settings.WHISPER_INITIAL_PROMPT else None,
+                initial_prompt=prompt,
                 language=forced_lang
             )
+
 
             transcribed_fragments = [seg.text.strip() for seg in segments if seg.text.strip()]
             raw_text = " ".join(transcribed_fragments).strip()
